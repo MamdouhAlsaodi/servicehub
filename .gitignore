@@ -11,3 +11,5 @@ dist/
 coverage/
 test_*.js
 *.test.js
+test_*.js
+.env.test
