@@ -11,5 +11,5 @@
     "skipLibCheck": true,
     "types": ["node", "jest"]
   },
-  "exclude": ["prisma"]
+  "exclude": ["prisma", "test", "node_modules", "dist"]
 }

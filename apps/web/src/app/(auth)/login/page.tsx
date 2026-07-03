@@ -7,7 +7,7 @@ import { useAuth } from '@/contexts/AuthContext';
 
 export default function LoginPage() {
   const router = useRouter();
-  const { login } = useAuth();
+  const { login, vendorStatus } = useAuth();
   const [formData, setFormData] = useState({
     email: '',
     password: '',
@@ -24,26 +24,51 @@ export default function LoginPage() {
       await login(formData.email, formData.password);
       
       // Get user from localStorage to determine redirect
+      const token = localStorage.getItem('access_token');
       const response = await fetch(`${process.env.NEXT_PUBLIC_API_URL || ''}/api/v1/auth/me`, {
         headers: {
-          Authorization: `Bearer ${localStorage.getItem('access_token')}`,
+          Authorization: `Bearer ${token}`,
         },
       });
       const user = await response.json();
       
       // Set cookie for middleware
-      const token = localStorage.getItem('access_token');
       if (token) {
         document.cookie = `access_token=${token}; path=/; max-age=900`;
       }
       
-      // Redirect based on role
+      // Fetch vendor status if VENDOR role
+      let currentVendorStatus = null;
+      if (user.role === 'VENDOR') {
+        try {
+          const statusResponse = await fetch(`${process.env.NEXT_PUBLIC_API_URL || ''}/api/v1/auth/vendor-status`, {
+            headers: {
+              Authorization: `Bearer ${token}`,
+            },
+          });
+          if (statusResponse.ok) {
+            const statusData = await statusResponse.json();
+            currentVendorStatus = statusData.status;
+          }
+        } catch (err) {
+          console.error('Failed to fetch vendor status:', err);
+        }
+      }
+      
+      // Redirect based on role and status
       switch (user.role) {
         case 'ADMIN':
           router.push('/admin');
           break;
         case 'VENDOR':
-          router.push('/dashboard');
+          // Check vendor approval status
+          if (currentVendorStatus === 'APPROVED') {
+            router.push('/dashboard');
+          } else if (currentVendorStatus === 'PENDING') {
+            router.push('/vendor-pending');
+          } else {
+            router.push('/vendor-suspended');
+          }
           break;
         case 'CUSTOMER':
         default:
