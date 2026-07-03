@@ -50,15 +50,30 @@ model User {
   createdAt           DateTime  @default(now())
   updatedAt           DateTime  @updatedAt
 
-  vendorProfile VendorProfile?
-  bookings      Booking[]      @relation("CustomerBookings")
-  reviews       Review[]
-  messages      Message[]      @relation("SentMessages")
-  notifications Notification[]
-  refreshTokens RefreshToken[]
+  vendorProfile   VendorProfile[]
+  bookings        Booking[]           @relation("CustomerBookings")
+  reviews         Review[]
+  messages        Message[]           @relation("SentMessages")
+  notifications   Notification[]
+  refreshTokens   RefreshToken[]
+  passwordResets  PasswordReset[]
 
   @@index([role])
   @@index([email])
+}
+
+model PasswordReset {
+  id        String    @id @default(cuid())
+  userId    String
+  token     String    @unique
+  expiresAt DateTime
+  usedAt    DateTime?
+  createdAt DateTime  @default(now())
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@index([token])
 }
 
 model RefreshToken {
