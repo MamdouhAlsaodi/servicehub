@@ -102,6 +102,9 @@ model VendorProfile {
   commissionRate Float        @default(0.10)
   status         VendorStatus @default(PENDING)
   avgRating      Float?       @default(0)
+  /// IANA timezone, e.g. "America/Sao_Paulo". Used by the booking engine
+  /// to interpret vendor availability windows in the vendor's local time.
+  timezone       String       @default("UTC")
   createdAt      DateTime     @default(now())
   updatedAt      DateTime     @updatedAt
 
@@ -175,6 +178,11 @@ model Booking {
   cancelledBy        String?
   createdAt          DateTime      @default(now())
   updatedAt          DateTime      @updatedAt
+
+  /// Generated column backed by the startTime/endTime range. Managed by
+  /// the booking_no_overlap migration. Prisma can SELECT it via raw
+  /// queries but cannot mutate it directly.
+  timeRange          Unsupported("tstzrange")?
 
   customer User          @relation("CustomerBookings", fields: [customerId], references: [id])
   vendor   VendorProfile @relation("VendorBookings", fields: [vendorId], references: [id])
