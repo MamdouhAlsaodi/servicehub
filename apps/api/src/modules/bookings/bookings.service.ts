@@ -328,7 +328,7 @@ export class BookingsService {
     status?: BookingStatus,
   ): Promise<Booking[]> {
     if (role === UserRole.CUSTOMER) {
-      return this.prisma.booking.findMany({
+      const bookings = await this.prisma.booking.findMany({
         where: {
           customerId: userId,
           ...(status ? { status } : {}),
@@ -337,8 +337,17 @@ export class BookingsService {
         include: {
           service: { select: { title: true, durationMinutes: true } },
           vendor: { select: { businessName: true } },
+          review: { select: { id: true } },
         },
       });
+      /* Surface a `hasReview` boolean for the frontend to decide
+       * whether to show a "قيّم" CTA. The shape stays backward-compatible
+       * — Prisma's `review: { select }` adds the field but clients
+       * that ignore unknown keys keep working. */
+      return bookings.map((b) => ({
+        ...b,
+        hasReview: b.review !== null,
+      })) as unknown as Booking[];
     }
     if (role === UserRole.VENDOR) {
       const vendor = await this.prisma.vendorProfile.findFirst({
@@ -355,6 +364,7 @@ export class BookingsService {
         include: {
           service: { select: { title: true, durationMinutes: true } },
           customer: { select: { name: true } },
+          review: { select: { rating: true } },
         },
       });
     }
@@ -366,6 +376,7 @@ export class BookingsService {
         service: { select: { title: true } },
         vendor: { select: { businessName: true } },
         customer: { select: { name: true } },
+        review: { select: { rating: true } },
       },
     });
   }
