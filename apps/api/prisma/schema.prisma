@@ -35,6 +35,11 @@ enum PaymentStatus {
   PARTIALLY_REFUNDED
 }
 
+enum PaymentProvider {
+  STRIPE
+  MOCK
+}
+
 model User {
   id                  String    @id @default(cuid())
   name                String
@@ -197,18 +202,29 @@ model Booking {
 }
 
 model Payment {
-  id                    String        @id @default(cuid())
-  bookingId             String        @unique
-  stripePaymentIntentId String        @unique
-  amount                Decimal       @db.Decimal(10, 2)
-  status                PaymentStatus @default(PENDING)
-  refundedAmount        Decimal       @default(0) @db.Decimal(10, 2)
-  createdAt             DateTime      @default(now())
-  updatedAt             DateTime      @updatedAt
+  id                    String          @id @default(cuid())
+  bookingId             String          @unique
+  provider              PaymentProvider @default(STRIPE)
+  /// Provider-specific identifier (e.g. Stripe PaymentIntent ID, or
+  /// our own mock txn id). Unique within a provider, but two providers
+  /// can each have their own namespace.
+  externalId            String          @unique
+  amount                Decimal         @db.Decimal(10, 2)
+  currency              String          @default("brl")
+  status                PaymentStatus   @default(PENDING)
+  refundedAmount        Decimal         @default(0) @db.Decimal(10, 2)
+  /// Opaque payload from the provider at create time (e.g. Stripe
+  /// client_secret we hand to the frontend).
+  clientSecret          String?
+  /// Last webhook event we processed for this payment.
+  lastEventId           String?
+  createdAt             DateTime        @default(now())
+  updatedAt             DateTime        @updatedAt
 
   booking Booking @relation(fields: [bookingId], references: [id], onDelete: Cascade)
 
   @@index([status])
+  @@index([provider, externalId])
 }
 
 model Review {

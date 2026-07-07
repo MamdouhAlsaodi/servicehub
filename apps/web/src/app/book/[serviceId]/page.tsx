@@ -75,6 +75,7 @@ export default function BookServicePage({
   const [loadingSlots, setLoadingSlots] = useState(false);
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [paymentId, setPaymentId] = useState<string | null>(null);
   const [success, setSuccess] = useState<{ bookingId: string } | null>(null);
 
   const days = useMemo(() => nextDays(14), []);
@@ -152,6 +153,27 @@ export default function BookServicePage({
       }
       const data = await res.json();
       setSuccess({ bookingId: data.booking.id });
+
+      /* Best-effort: kick off a payment intent so /checkout has something
+       * to display immediately. If this fails (network blip, etc.) the
+       * user can still hit "ادفع الآن" later from /bookings. */
+      try {
+        const intentRes = await fetch(
+          `${process.env.NEXT_PUBLIC_API_URL}/payments/intent`,
+          {
+            method: "POST",
+            credentials: "include",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ bookingId: data.booking.id }),
+          },
+        );
+        if (intentRes.ok) {
+          const intent = await intentRes.json();
+          setPaymentId(intent.paymentId);
+        }
+      } catch {
+        /* non-fatal */
+      }
     } catch (e: any) {
       setError(e.message || "تعذر الحجز");
     } finally {
@@ -203,14 +225,26 @@ export default function BookServicePage({
             محجوز لك "{service.title}". أكمل الدفع خلال 5 دقائق لتأكيد
             الحجز.
           </p>
-          <div className="flex gap-2 justify-center">
+          <div className="flex flex-wrap gap-2 justify-center">
+            {paymentId && (
+              <Link
+                href={`/checkout/${paymentId}`}
+                className="px-4 py-2 rounded-full text-sm font-bold inline-flex items-center gap-1"
+                style={{ background: "var(--accent)", color: "var(--bg)" }}
+              >
+                ادفع الآن
+              </Link>
+            )}
             <Link
               href="/bookings"
               className="px-4 py-2 rounded-full text-sm font-bold inline-flex items-center gap-1"
-              style={{ background: "var(--accent)", color: "var(--bg)" }}
+              style={{
+                background: paymentId ? "transparent" : "var(--accent)",
+                border: paymentId ? "1px solid var(--border)" : "none",
+                color: paymentId ? "var(--text)" : "var(--bg)",
+              }}
             >
               عرض حجوزاتي
-              <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><line x1="5" y1="12" x2="19" y2="12"/><polyline points="12 5 19 12 12 19"/></svg>
             </Link>
             <Link
               href="/"
