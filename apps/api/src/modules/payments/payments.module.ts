@@ -15,6 +15,8 @@ import { PaymentsController } from './payments.controller';
 import { MockPaymentProvider } from './providers/mock-payment.provider';
 import { StripePaymentProvider } from './providers/stripe-payment.provider';
 import { PaymentProvider } from './providers/payment-provider.interface';
+import { NotificationsModule } from '../notifications/notifications.module';
+import { NotificationsService } from '../notifications/notifications.service';
 
 const logger = new Logger('PaymentsModule');
 
@@ -43,6 +45,7 @@ function selectProvider(): PaymentProvider {
 const provider = selectProvider();
 
 @Module({
+  imports: [NotificationsModule],
   controllers: [PaymentsController],
   providers: [
     {
@@ -54,8 +57,9 @@ const provider = selectProvider();
       useValue: provider.name === 'MOCK' ? provider : undefined,
     },
     PaymentsService,
+    NotificationsService,
   ],
-  exports: [PaymentsService],
+  exports: [PaymentsService, NotificationsService],
 })
 export class PaymentsModule {
   constructor() {

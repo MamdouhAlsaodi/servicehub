@@ -34,6 +34,7 @@ import {
 } from '@prisma/client';
 import { Decimal } from '@prisma/client/runtime/library';
 import { PaymentProvider } from './providers/payment-provider.interface';
+import { NotificationsService } from '../notifications/notifications.service';
 
 const HOLD_MINUTES = 5;
 const MIN_REFUND_AMOUNT = 1; // major units
@@ -45,6 +46,7 @@ export class PaymentsService {
   constructor(
     private readonly prisma: PrismaService,
     @Inject('PAYMENT_PROVIDER') private readonly provider: PaymentProvider,
+    private readonly notifications: NotificationsService,
   ) {}
 
   /* ═══════════════════════════════════════════
@@ -196,16 +198,16 @@ export class PaymentsService {
    * The transaction guarantees the booking and payment states stay in sync.
    */
   async confirmPayment(paymentId: string, eventId: string) {
-    return this.prisma.$transaction(async (tx) => {
+    const result = await this.prisma.$transaction(async (tx) => {
       const payment = await tx.payment.findUnique({
         where: { id: paymentId },
       });
       if (!payment) throw new NotFoundException('Payment not found');
       if (payment.status === PaymentStatus.SUCCEEDED) {
-        return; // already confirmed (defensive — caller already deduped)
+        return { payment, skipped: true };
       }
 
-      await tx.payment.update({
+      const updatedPayment = await tx.payment.update({
         where: { id: paymentId },
         data: {
           status: PaymentStatus.SUCCEEDED,
@@ -224,18 +226,60 @@ export class PaymentsService {
           holdExpiresAt: null,
         },
       });
+
+      return { payment: updatedPayment, skipped: false };
     });
+
+    if (!result.skipped) {
+      /* Best-effort fan-out: create the notification row. We don't
+       * fail the transaction if this errors — the money has moved
+       * and the booking is confirmed; the notification is a UX
+       * courtesy. */
+      try {
+        const fullPayment = await this.prisma.payment.findUnique({
+          where: { id: result.payment.id },
+          include: { booking: { include: { vendor: true } } },
+        });
+        if (fullPayment) {
+          await this.notifications.create({
+            userId: fullPayment.booking.customerId,
+            type: 'PAYMENT_RECEIVED',
+            payload: {
+              paymentId: fullPayment.id,
+              bookingId: fullPayment.bookingId,
+              amount: Number(fullPayment.amount),
+              currency: fullPayment.currency,
+            },
+          });
+          await this.notifications.create({
+            userId: fullPayment.booking.vendor.userId,
+            type: 'BOOKING_CONFIRMED',
+            payload: {
+              bookingId: fullPayment.bookingId,
+            },
+          });
+        }
+      } catch (e) {
+        this.logger.warn(
+          `Notifications emit failed for payment ${paymentId}: ${e}`,
+        );
+      }
+    }
+
+    return result.payment;
   }
 
   async failPayment(paymentId: string, eventId: string) {
-    return this.prisma.$transaction(async (tx) => {
+    const result = await this.prisma.$transaction(async (tx) => {
       const payment = await tx.payment.findUnique({
         where: { id: paymentId },
       });
       if (!payment) throw new NotFoundException('Payment not found');
-      if (payment.status === PaymentStatus.FAILED) return;
+      if (payment.status === PaymentStatus.FAILED) {
+        return { payment, skipped: true };
+      }
 
-      await tx.payment.update({
+      const updatedPayment = await tx.payment.update({
         where: { id: paymentId },
         data: {
           status: PaymentStatus.FAILED,
@@ -256,7 +300,34 @@ export class PaymentsService {
           holdExpiresAt: null,
         },
       });
+
+      return { payment: updatedPayment, skipped: false };
     });
+
+    if (!result.skipped) {
+      try {
+        const fullPayment = await this.prisma.payment.findUnique({
+          where: { id: result.payment.id },
+          include: { booking: true },
+        });
+        if (fullPayment) {
+          await this.notifications.create({
+            userId: fullPayment.booking.customerId,
+            type: 'PAYMENT_FAILED',
+            payload: {
+              paymentId: fullPayment.id,
+              bookingId: fullPayment.bookingId,
+            },
+          });
+        }
+      } catch (e) {
+        this.logger.warn(
+          `Notification emit failed for failed payment ${paymentId}: ${e}`,
+        );
+      }
+    }
+
+    return result.payment;
   }
 
   async refundPayment(
