@@ -9,10 +9,21 @@ export class VendorsService {
   async findAll(params: {
     categoryId?: string;
     search?: string;
+    minPrice?: number;
+    maxPrice?: number;
+    minRating?: number;
     page?: number;
     limit?: number;
   }) {
-    const { categoryId, search, page = 1, limit = 20 } = params;
+    const {
+      categoryId,
+      search,
+      minPrice,
+      maxPrice,
+      minRating,
+      page = 1,
+      limit = 20,
+    } = params;
     const skip = (page - 1) * limit;
 
     const where: any = {
@@ -28,6 +39,21 @@ export class VendorsService {
         { businessName: { contains: search, mode: 'insensitive' } },
         { description: { contains: search, mode: 'insensitive' } },
       ];
+    }
+
+    /* Price filter: vendor has services; require at least one
+     * service whose price falls within [min, max]. We translate to
+     * an `services.some` clause — Prisma converts it to a subquery. */
+    if (minPrice !== undefined || maxPrice !== undefined) {
+      const priceClause: any = {};
+      if (minPrice !== undefined) priceClause.gte = minPrice;
+      if (maxPrice !== undefined) priceClause.lte = maxPrice;
+      where.services = { some: { price: priceClause, isActive: true } };
+    }
+
+    /* Rating filter on the vendor's cached avgRating. */
+    if (minRating !== undefined && minRating > 0) {
+      where.avgRating = { gte: minRating };
     }
 
     const [vendors, total] = await Promise.all([

@@ -24,12 +24,18 @@ export class VendorsController {
   async findAll(
     @Query('categoryId') categoryId?: string,
     @Query('search') search?: string,
+    @Query('minPrice') minPrice?: string,
+    @Query('maxPrice') maxPrice?: string,
+    @Query('minRating') minRating?: string,
     @Query('page') page?: string,
     @Query('limit') limit?: string,
   ) {
     return this.vendorsService.findAll({
       categoryId,
       search,
+      minPrice: minPrice ? parseFloat(minPrice) : undefined,
+      maxPrice: maxPrice ? parseFloat(maxPrice) : undefined,
+      minRating: minRating ? parseFloat(minRating) : undefined,
       page: page ? parseInt(page, 10) : undefined,
       limit: limit ? parseInt(limit, 10) : undefined,
     });
