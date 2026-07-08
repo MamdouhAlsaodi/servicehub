@@ -39,11 +39,15 @@ describe('ReviewsService', () => {
   let categoryId: string;
   let serviceId: string;
 
+  /* Slot offset counter — each call gets a unique 60-min slot so the
+   * EXCLUDE constraint doesn't reject duplicates. */
+  let slotCounter = 0;
   async function makeConfirmedBooking(opts?: { customerId?: string }) {
     /* Pre-confirmed booking + succeeded payment — the review-ready state. */
     const cust = opts?.customerId ?? customerId;
-    const future = new Date(Date.now() + 48 * 60 * 60_000);
+    const future = new Date(Date.now() + (48 + slotCounter) * 60 * 60_000);
     future.setMinutes(0, 0, 0);
+    slotCounter += 1;
     const booking = await prisma.booking.create({
       data: {
         customerId: cust,
