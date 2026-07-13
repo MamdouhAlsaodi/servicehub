@@ -10,7 +10,9 @@
     "start:prod": "node dist/main",
     "test": "jest",
     "test:watch": "jest --watch",
-    "test:cov": "jest --coverage"
+    "test:cov": "jest --coverage",
+    "test:detect": "jest --detectOpenHandles --runInBand",
+    "db:test:reset": "ts-node scripts/reset-test-db.ts"
   },
   "prisma": {
     "seed": "ts-node prisma/seed.ts"

@@ -1,15 +1,12 @@
+# Local environment credentials — never commit.
+.env
+.env.*
+!.env.example
+!.env.*.example
+
+# Dependencies and generated artifacts
 node_modules/
 dist/
-.next/
-.env
-.env.local
-*.local
-*.db
-*.db-journal
-.DS_Store
-*.tsbuildinfo
 coverage/
-test_*.js
-*.test.js
-test_*.js
-.env.test
+.next/
+*.tsbuildinfo

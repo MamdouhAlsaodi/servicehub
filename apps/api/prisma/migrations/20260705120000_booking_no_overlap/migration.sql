@@ -18,6 +18,13 @@
 --      unexpired holds. Cancelled bookings and expired holds don't
 --      participate, so they pile up freely for analytics.
 
+-- btree_gist is required for the EXCLUDE/GiST index on the text
+-- `vendorId` column. We enable it idempotently at the top of the
+-- migration so that fresh databases (test DB after `migrate reset`,
+-- CI runners) get it without an out-of-band step. Dev DBs already
+-- have it; the IF NOT EXISTS makes the call safe.
+CREATE EXTENSION IF NOT EXISTS btree_gist;
+
 -- 1. The column itself. Nullable so existing rows can survive the
 --    migration without a backfill (they're seeded test data).
 ALTER TABLE "Booking"
