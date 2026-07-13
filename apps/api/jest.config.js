@@ -21,12 +21,22 @@ module.exports = {
       tsconfig: path.resolve(__dirname, 'tsconfig.json'),
     }],
   },
-  testTimeout: 30000,
+  // Coverage instrumentation makes DB-backed integration setup slower;
+  // 60s prevents a timed-out cleanup from overlapping the next test.
+  testTimeout: 60000,
   collectCoverageFrom: [
-    'modules/auth/**/*.ts',
-    '!modules/auth/**/*.module.ts',
-    '!modules/auth/**/*.dto.ts',
+    'modules/auth/auth.service.ts',
+    'modules/bookings/bookings.service.ts',
+    'modules/payments/payments.service.ts',
   ],
+  coverageThreshold: {
+    global: {
+      branches: 50,
+      functions: 60,
+      lines: 70,
+      statements: 70,
+    },
+  },
   coverageDirectory: path.resolve(__dirname, 'coverage'),
   // setupFiles (NOT setupFilesAfterEach) — runs BEFORE the test
   // framework and BEFORE any SUT module is imported. This is the
