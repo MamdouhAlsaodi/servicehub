@@ -12,7 +12,10 @@
     "test:watch": "jest --watch",
     "test:cov": "jest --coverage",
     "test:detect": "jest --detectOpenHandles --runInBand",
-    "db:test:reset": "ts-node scripts/reset-test-db.ts"
+    "db:test:reset": "ts-node scripts/reset-test-db.ts",
+    "dev:fixtures:audit": "ts-node scripts/audit-and-clean-dev-fixtures.ts",
+    "dev:fixtures:apply": "ts-node scripts/audit-and-clean-dev-fixtures.ts --apply",
+    "dev:fixtures:seed": "npx prisma db seed"
   },
   "prisma": {
     "seed": "ts-node prisma/seed.ts"

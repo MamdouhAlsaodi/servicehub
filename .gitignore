@@ -10,3 +10,7 @@ dist/
 coverage/
 .next/
 *.tsbuildinfo
+
+# TypeScript emits accidentally produced outside dist/ by failed local builds
+apps/api/scripts/*.js
+apps/api/test/helpers/*.js
