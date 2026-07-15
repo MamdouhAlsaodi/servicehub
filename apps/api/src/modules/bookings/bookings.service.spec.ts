@@ -54,6 +54,9 @@ describe('BookingsService', () => {
 
   beforeEach(async () => {
     await cleanDatabase();
+    // PlatformSettings is intentionally durable and not part of the legacy
+    // cleanup helper; remove it so existing tests exercise the 10% fallback.
+    await prisma.platformSettings.deleteMany();
 
     const module: TestingModule = await Test.createTestingModule({
       providers: [
@@ -165,6 +168,31 @@ describe('BookingsService', () => {
       const holdMs = booking.holdExpiresAt!.getTime() - booking.createdAt.getTime();
       expect(holdMs).toBeGreaterThanOrEqual(4 * 60_000);
       expect(holdMs).toBeLessThanOrEqual(6 * 60_000);
+    });
+
+    it('(B5) snapshots the current Decimal rate onto new bookings only', async () => {
+      const firstStart = new Date(Date.now() + 48 * 60 * 60_000);
+      firstStart.setMinutes(0, 0, 0);
+      const original = await service.createBooking(
+        { serviceId, startTime: firstStart.toISOString() },
+        customerId,
+      );
+      expect(original.commissionAmount.toFixed(2)).toBe('10.00');
+
+      await prisma.platformSettings.create({
+        data: { id: 1, commissionRate: '0.125000' },
+      });
+      const configuredStart = new Date(firstStart.getTime() + 2 * 60 * 60_000);
+      const configured = await service.createBooking(
+        { serviceId, startTime: configuredStart.toISOString() },
+        otherCustomerId,
+      );
+
+      expect(configured.commissionAmount.toFixed(2)).toBe('12.50');
+      const historical = await prisma.booking.findUniqueOrThrow({
+        where: { id: original.id },
+      });
+      expect(historical.commissionAmount.toFixed(2)).toBe('10.00');
     });
 
     it('(TEST 2) rejects past startTime', async () => {
@@ -376,9 +404,91 @@ describe('BookingsService', () => {
       ).rejects.toThrow(BadRequestException);
     });
   });
-});
+/* B2 Task 4 — vendor dashboard read model. */
+  describe('getVendorDashboard', () => {
+    let otherVendorUserId: string;
+    let otherServiceId: string;
 
-/* ═══════════════════════════════════════════
+    beforeEach(async () => {
+      const hash = await bcrypt.hash('password123', 4);
+      const otherUser = await prisma.user.create({
+        data: { name: 'Other', email: 'othervendor@test.com', passwordHash: hash, role: UserRole.VENDOR },
+      });
+      otherVendorUserId = otherUser.id;
+      const otherVendor = await prisma.vendorProfile.create({
+        data: { userId: otherUser.id, businessName: 'Other Bistro', categoryId, status: VendorStatus.APPROVED, timezone: 'UTC' },
+      });
+      otherServiceId = (await prisma.service.create({
+        data: { vendorId: otherVendor.id, title: 'Other Service', price: '999.00', durationMinutes: 60, categoryId },
+      })).id;
+      const tomorrow = new Date(); tomorrow.setUTCDate(tomorrow.getUTCDate() + 1); tomorrow.setUTCHours(12, 0, 0, 0);
+      for (const [h, status] of [[0, BookingStatus.CONFIRMED], [2, BookingStatus.CANCELLED], [4, BookingStatus.PENDING_PAYMENT]] as Array<[number, BookingStatus]>) {
+        await prisma.booking.create({
+          data: { customerId, vendorId: otherVendor.id, serviceId: otherServiceId,
+            startTime: new Date(tomorrow.getTime() + h * 3_600_000),
+            endTime: new Date(tomorrow.getTime() + (h + 1) * 3_600_000),
+            status, priceAtBooking: '999', commissionAmount: '99.9' },
+        });
+      }
+    });
+
+    const seedPrimary = async (when: Date | number, status: BookingStatus, price = '100') => {
+      const t = typeof when === 'number' ? new Date(Date.now() + when * 3_600_000) : when;
+      t.setUTCMinutes(0, 0, 0);
+      await prisma.booking.create({
+        data: { customerId, vendorId, serviceId,
+          startTime: t, endTime: new Date(t.getTime() + 3_600_000),
+          status, priceAtBooking: price, commissionAmount: '10' },
+      });
+    };
+
+    it('(TEST 14) summary tenant-scoped: todayBookings/confirmedRevenue/cancellations', async () => {
+      const today1 = new Date(); today1.setUTCHours(9, 0, 0, 0);
+      const today2 = new Date(); today2.setUTCHours(15, 0, 0, 0);
+      await seedPrimary(today1, BookingStatus.CONFIRMED);
+      await seedPrimary(today2, BookingStatus.CANCELLED);
+      await seedPrimary(48, BookingStatus.CONFIRMED);
+      await seedPrimary(50, BookingStatus.CANCELLED);
+      const d = await service.getVendorDashboard(vendorUserId, 5);
+      expect(d.summary).toEqual({ todayBookings: 2, confirmedRevenue: 200, cancellations: 2 });
+    });
+
+    it('(TEST 15) topServices: CONFIRMED-only, never leaks second vendor', async () => {
+      await seedPrimary(72, BookingStatus.CONFIRMED);
+      await seedPrimary(74, BookingStatus.CANCELLED);
+      const d = await service.getVendorDashboard(vendorUserId, 5);
+      expect(d.topServices).toEqual([{ serviceId, title: 'Lunch Reservation', bookings: 1, revenue: 100 }]);
+      expect(d.topServices.find((s) => s.serviceId === otherServiceId)).toBeUndefined();
+    });
+
+    it('(TEST 16) upcomingBookings: CONFIRMED + future, tenant-scoped', async () => {
+      await seedPrimary(96, BookingStatus.CONFIRMED);
+      await seedPrimary(97, BookingStatus.PENDING_PAYMENT);
+      const d = await service.getVendorDashboard(vendorUserId, 5);
+      expect(d.upcomingBookings).toHaveLength(1);
+      expect(d.upcomingBookings[0]).toMatchObject({ status: BookingStatus.CONFIRMED, service: { id: serviceId }, customer: { id: customerId } });
+      expect(d.upcomingBookings.every((b) => b.service.id !== otherServiceId)).toBe(true);
+    });
+
+    it('(TEST 18) cross-tenant: second vendor never sees primary', async () => {
+      await seedPrimary(120, BookingStatus.CONFIRMED);
+      const d = await service.getVendorDashboard(otherVendorUserId, 5);
+      expect(d.summary).toEqual({ todayBookings: 0, confirmedRevenue: 999, cancellations: 1 });
+      expect(d.topServices[0].serviceId).toBe(otherServiceId);
+      expect(d.topServices.find((s) => s.serviceId === serviceId)).toBeUndefined();
+    });
+
+    it('(TEST 19) limit is bounded: huge clamps to 20, negative/0 to 1, NaN to default 5', async () => {
+      for (let i = 0; i < 22; i++) await seedPrimary(168 + i, BookingStatus.CONFIRMED);
+      const d = await service.getVendorDashboard(vendorUserId, 999);
+      expect(d.topServices.length).toBeLessThanOrEqual(20);
+      expect(d.upcomingBookings.length).toBeLessThanOrEqual(20);
+      expect((await service.getVendorDashboard(vendorUserId, 0)).topServices.length).toBeLessThanOrEqual(1);
+      expect((await service.getVendorDashboard(vendorUserId, -5)).topServices.length).toBeLessThanOrEqual(1);
+      expect((await service.getVendorDashboard(vendorUserId, Number.NaN)).topServices.length).toBeLessThanOrEqual(5);
+    });
+  });
+});/* ═══════════════════════════════════════════
    HELPERS
    ═══════════════════════════════════════════ */
 

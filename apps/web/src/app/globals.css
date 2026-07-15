@@ -24,11 +24,16 @@
   --color-text-dim: #5C5966;
 }
 
-html {
+html[dir='rtl'] {
   direction: rtl;
 }
 
+html[dir='ltr'] {
+  direction: ltr;
+}
+
 :root {
+  color-scheme: dark;
   --bg: #0F0E13;
   --surface: #1A1822;
   --surface-hi: #24222E;
@@ -38,6 +43,30 @@ html {
   --text: #F5F2EC;
   --text-muted: #9B98A5;
   --text-dim: #5C5966;
+  --glass-bg: rgba(26, 24, 34, 0.8);
+}
+
+html[data-theme='light'] {
+  color-scheme: light;
+  --bg: #F7F7FA;
+  --surface: #FFFFFF;
+  --surface-hi: #ECEBF1;
+  --border: #8C8795;
+  --accent: #B33A20;
+  --accent-hi: #922F1A;
+  --text: #19171F;
+  --text-muted: #55515E;
+  --text-dim: #686370;
+  --glass-bg: rgba(255, 255, 255, 0.88);
+  --color-bg: #F7F7FA;
+  --color-surface: #FFFFFF;
+  --color-surface-hi: #ECEBF1;
+  --color-border: #8C8795;
+  --color-accent: #B33A20;
+  --color-accent-hi: #922F1A;
+  --color-text: #19171F;
+  --color-text-muted: #55515E;
+  --color-text-dim: #686370;
 }
 
 html, body {
@@ -75,7 +104,7 @@ h1, h2, h3, .font-display {
 
 /* Glass morphism utility */
 .glass {
-  background: rgba(26, 24, 34, 0.8);
+  background: var(--glass-bg);
   backdrop-filter: blur(12px);
   border: 1px solid var(--border);
 }
@@ -83,4 +112,62 @@ h1, h2, h3, .font-display {
 /* Signature top bar gradient */
 .top-bar-gradient {
   background: linear-gradient(90deg, var(--surface) 0%, var(--surface-hi) 50%, var(--surface) 100%);
+}
+
+/* Root-mounted preference controls */
+.global-preferences-menu {
+  position: fixed;
+  left: max(12px, env(safe-area-inset-left));
+  bottom: max(12px, env(safe-area-inset-bottom));
+  z-index: 10000;
+  display: flex;
+  direction: ltr;
+  gap: 4px;
+  padding: 4px;
+  color: var(--text);
+  background: var(--surface);
+  border: 2px solid var(--text);
+  border-radius: 14px;
+  box-shadow: 0 8px 24px rgba(15, 14, 19, 0.28);
+}
+
+.global-preference-button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 7px;
+  min-width: 44px;
+  min-height: 44px;
+  padding: 0 10px;
+  color: var(--text);
+  background: var(--surface-hi);
+  border: 1px solid var(--border);
+  border-radius: 9px;
+  font: inherit;
+  font-size: 13px;
+  font-weight: 700;
+  line-height: 1;
+  cursor: pointer;
+  touch-action: manipulation;
+}
+
+.global-preference-button:hover {
+  color: var(--accent);
+  border-color: var(--accent);
+}
+
+.global-preference-button:focus-visible {
+  outline: 3px solid var(--accent);
+  outline-offset: 3px;
+}
+
+.global-preference-locale {
+  min-width: 48px;
+  letter-spacing: 0.04em;
+}
+
+@media (prefers-reduced-motion: no-preference) {
+  .global-preference-button {
+    transition: color 150ms ease, border-color 150ms ease, background-color 150ms ease;
+  }
 }

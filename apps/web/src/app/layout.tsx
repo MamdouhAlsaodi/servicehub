@@ -1,6 +1,13 @@
 import type { Metadata } from 'next';
+import { cookies } from 'next/headers';
 import { Inter, Fraunces, JetBrains_Mono } from 'next/font/google';
+import { GlobalPreferencesMenu } from '@/components/GlobalPreferencesMenu';
 import { AuthProvider } from '@/contexts/AuthContext';
+import {
+  PreferencesProvider,
+  type Locale,
+  type Theme,
+} from '@/contexts/PreferencesContext';
 import './globals.css';
 
 const inter = Inter({ 
@@ -31,10 +38,18 @@ export default function RootLayout({
 }: {
   children: React.ReactNode;
 }) {
+  const cookieStore = cookies();
+  const initialTheme: Theme = cookieStore.get('sh_theme')?.value === 'light' ? 'light' : 'dark';
+  const initialLocale: Locale = cookieStore.get('sh_locale')?.value === 'en' ? 'en' : 'ar';
+  const direction = initialLocale === 'ar' ? 'rtl' : 'ltr';
+
   return (
-    <html lang="ar" dir="rtl">
+    <html lang={initialLocale} dir={direction} data-theme={initialTheme}>
       <body className={`${inter.variable} ${fraunces.variable} ${jetbrainsMono.variable}`}>
-        <AuthProvider>{children}</AuthProvider>
+        <PreferencesProvider initialTheme={initialTheme} initialLocale={initialLocale}>
+          <AuthProvider>{children}</AuthProvider>
+          <GlobalPreferencesMenu />
+        </PreferencesProvider>
       </body>
     </html>
   );

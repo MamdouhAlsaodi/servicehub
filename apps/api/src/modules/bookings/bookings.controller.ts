@@ -9,6 +9,7 @@
  *   POST /bookings/:id/cancel         — cancel (3.5)          [owner]
  */
 import {
+  BadRequestException,
   Controller,
   Get,
   Post,
@@ -24,8 +25,16 @@ import { CreateBookingDto } from './dto/create-booking.dto';
 import { CancelBookingDto } from './dto/cancel-booking.dto';
 import { AvailableSlotsQueryDto } from './dto/available-slots-query.dto';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
+import { RolesGuard } from '../auth/guards/roles.guard';
+import { Roles } from '../auth/decorators/roles.decorator';
 import { CurrentUser } from '../auth/decorators/current-user.decorator';
 import { BookingStatus, UserRole } from '@prisma/client';
+
+/* Hard cap on `limit` for the vendor dashboard read model. Clamped
+ * in the controller (and re-clamped in the service) so a single
+ * endpoint can never ask the DB for more than 20 rows. */
+const DASHBOARD_DEFAULT_LIMIT = 5;
+const DASHBOARD_MAX_LIMIT = 20;
 
 @Controller('bookings')
 export class BookingsController {
@@ -79,6 +88,24 @@ export class BookingsController {
     return this.bookingsService.findMyBookings(userId, role, status);
   }
 
+  /* ═══════════════════════════════════════════
+     VENDOR DASHBOARD (B2 Task 4)
+     ═══════════════════════════════════════════ */
+
+  /* Declared BEFORE @Get(':id') so NestJS routes the literal
+   * 'vendor/dashboard' segment here instead of treating 'vendor'
+   * as an :id parameter. */
+  @Get('vendor/dashboard')
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles(UserRole.VENDOR)
+  async vendorDashboard(
+    @CurrentUser('id') userId: string,
+    @Query('limit') limitRaw?: string,
+  ) {
+    const limit = this.parseDashboardLimit(limitRaw);
+    return this.bookingsService.getVendorDashboard(userId, limit);
+  }
+
   @Get(':id')
   @UseGuards(JwtAuthGuard)
   async findOne(
@@ -103,5 +130,21 @@ export class BookingsController {
     @Body() dto: CancelBookingDto,
   ) {
     return this.bookingsService.cancelBooking(id, userId, role, dto);
+  }
+
+  /**
+   * Parse `?limit=` into [1, DASHBOARD_MAX_LIMIT]. Default is
+   * DASHBOARD_DEFAULT_LIMIT when absent. Non-integers and out-of-range
+   * values are rejected with 400 (not silently clamped) so caller bugs
+   * surface immediately.
+   */
+  private parseDashboardLimit(raw?: string): number {
+    if (raw === undefined || raw === '') return DASHBOARD_DEFAULT_LIMIT;
+    const trimmed = raw.trim();
+    if (!/^-?\d+$/.test(trimmed)) throw new BadRequestException('limit must be an integer');
+    const n = parseInt(trimmed, 10);
+    if (!Number.isFinite(n) || n < 1) throw new BadRequestException('limit must be >= 1');
+    if (n > DASHBOARD_MAX_LIMIT) throw new BadRequestException(`limit must be <= ${DASHBOARD_MAX_LIMIT}`);
+    return n;
   }
 }

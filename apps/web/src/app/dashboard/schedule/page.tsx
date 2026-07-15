@@ -1,8 +1,9 @@
 'use client';
 
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useMemo } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { apiFetch } from '@/lib/api';
+import { usePreferences } from '@/contexts/PreferencesContext';
 
 interface TimeSlot {
   id: string;
@@ -11,54 +12,91 @@ interface TimeSlot {
   endTime: string;
 }
 
-interface Exception {
-  id: string;
-  date: string;
-  isHoliday: boolean;
+interface ScheduleResponse {
+  schedule: TimeSlot[];
 }
 
-const DAYS_AR = ['الأحد', 'الإثنين', 'الثلاثاء', 'الأربعاء', 'الخميس', 'الجمعة', 'السبت'];
-const DAYS_SHORT_AR = ['أحد', 'إثنين', 'ثلاث', 'أرب', 'خميس', 'جمعة', 'سبت'];
+const DAY_KEYS = [
+  'dashboard.schedule.day.sun',
+  'dashboard.schedule.day.mon',
+  'dashboard.schedule.day.tue',
+  'dashboard.schedule.day.wed',
+  'dashboard.schedule.day.thu',
+  'dashboard.schedule.day.fri',
+  'dashboard.schedule.day.sat',
+] as const;
 
-// Generate hour labels (6 AM to 11 PM)
-const HOURS = Array.from({ length: 18 }, (_, i) => {
-  const hour = i + 6;
-  return hour > 12 ? `${hour - 12} م` : (hour === 12 ? '12 م' : `${hour} ص`);
-});
+const DAY_SHORT_KEYS = [
+  'dashboard.schedule.dayShort.sun',
+  'dashboard.schedule.dayShort.mon',
+  'dashboard.schedule.dayShort.tue',
+  'dashboard.schedule.dayShort.wed',
+  'dashboard.schedule.dayShort.thu',
+  'dashboard.schedule.dayShort.fri',
+  'dashboard.schedule.dayShort.sat',
+] as const;
 
 export default function SchedulePage() {
+  const { t, locale } = usePreferences();
   const [schedule, setSchedule] = useState<TimeSlot[]>([]);
-  const [exceptions, setExceptions] = useState<Exception[]>([]);
   const [loading, setLoading] = useState(true);
+  const [loadError, setLoadError] = useState<string | null>(null);
   const [selectedSlot, setSelectedSlot] = useState<{ dayOfWeek: number; hour: number } | null>(null);
   const [showModal, setShowModal] = useState(false);
   const [slotForm, setSlotForm] = useState({ startTime: '09:00', endTime: '17:00' });
   const [saving, setSaving] = useState(false);
 
-  useEffect(() => {
-    // Load from localStorage as mock API
-    const stored = localStorage.getItem('vendor_schedule');
-    if (stored) {
-      const data = JSON.parse(stored);
-      setSchedule(data.schedule || []);
-      setExceptions(data.exceptions || []);
+  const ampmSuffix = locale === 'ar' ? ' ' : ' ';
+  const amLabel = t('dashboard.schedule.am');
+  const pmLabel = t('dashboard.schedule.pm');
+
+  const days = useMemo(() => DAY_KEYS.map((k) => t(k)), [t]);
+  const daysShort = useMemo(() => DAY_SHORT_KEYS.map((k) => t(k)), [t]);
+
+  const hours = useMemo(() => {
+    const labels: string[] = [];
+    for (let i = 0; i < 18; i++) {
+      const hour = i + 6;
+      const isAm = hour < 12;
+      const display = hour > 12 ? hour - 12 : (hour === 12 ? 12 : hour);
+      labels.push(`${display}${ampmSuffix}${isAm ? amLabel : pmLabel}`);
     }
-    setLoading(false);
-  }, []);
+    return labels;
+  }, [ampmSuffix, amLabel, pmLabel]);
+
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      try {
+        const data = await apiFetch<ScheduleResponse>(
+          '/api/v1/availability/me/schedule',
+        );
+        if (cancelled) return;
+        setSchedule(Array.isArray(data?.schedule) ? data.schedule : []);
+      } catch (e: any) {
+        if (!cancelled) setLoadError(e?.message || t('dashboard.schedule.errorLoad'));
+      } finally {
+        if (!cancelled) setLoading(false);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [t]);
 
   const handleSlotClick = (dayOfWeek: number, hour: number) => {
     // Check if there's already a slot for this day
     const existingSlot = schedule.find(s => s.dayOfWeek === dayOfWeek);
-    
+
     if (existingSlot) {
       // Toggle selection
       if (selectedSlot?.dayOfWeek === dayOfWeek) {
         setSelectedSlot(null);
       } else {
         setSelectedSlot({ dayOfWeek, hour });
-        setSlotForm({ 
-          startTime: existingSlot.startTime, 
-          endTime: existingSlot.endTime 
+        setSlotForm({
+          startTime: existingSlot.startTime,
+          endTime: existingSlot.endTime
         });
         setShowModal(true);
       }
@@ -75,37 +113,41 @@ export default function SchedulePage() {
   };
 
   const handleSaveSlot = async () => {
+    if (!selectedSlot) return;
     setSaving(true);
-    
+
     try {
-      let updated: TimeSlot[];
-      
-      if (selectedSlot) {
-        const existing = schedule.find(s => s.dayOfWeek === selectedSlot.dayOfWeek);
-        if (existing) {
-          updated = schedule.map(s => 
-            s.dayOfWeek === selectedSlot.dayOfWeek 
+      const existing = schedule.find((s) => s.dayOfWeek === selectedSlot.dayOfWeek);
+      const next: TimeSlot[] = existing
+        ? schedule.map((s) =>
+            s.dayOfWeek === selectedSlot.dayOfWeek
               ? { ...s, startTime: slotForm.startTime, endTime: slotForm.endTime }
-              : s
-          );
-        } else {
-          updated = [
+              : s,
+          )
+        : [
             ...schedule,
             {
               id: `slot-${Date.now()}`,
               dayOfWeek: selectedSlot.dayOfWeek,
               startTime: slotForm.startTime,
               endTime: slotForm.endTime,
-            }
+            },
           ];
-        }
-        
-        setSchedule(updated);
-        localStorage.setItem('vendor_schedule', JSON.stringify({ 
-          schedule: updated, 
-          exceptions 
-        }));
-      }
+
+      const data = await apiFetch<ScheduleResponse>(
+        '/api/v1/availability/me/schedule',
+        {
+          method: 'POST',
+          body: JSON.stringify({
+            schedule: next.map((s) => ({
+              dayOfWeek: s.dayOfWeek,
+              startTime: s.startTime,
+              endTime: s.endTime,
+            })),
+          }),
+        },
+      );
+      setSchedule(Array.isArray(data?.schedule) ? data.schedule : []);
     } catch (err) {
       console.error('Failed to save slot:', err);
     } finally {
@@ -116,38 +158,70 @@ export default function SchedulePage() {
   };
 
   const handleRemoveSlot = async (dayOfWeek: number) => {
-    const updated = schedule.filter(s => s.dayOfWeek !== dayOfWeek);
-    setSchedule(updated);
-    localStorage.setItem('vendor_schedule', JSON.stringify({ 
-      schedule: updated, 
-      exceptions 
-    }));
-    setShowModal(false);
-    setSelectedSlot(null);
+    const next = schedule.filter((s) => s.dayOfWeek !== dayOfWeek);
+    try {
+      const data = await apiFetch<ScheduleResponse>(
+        '/api/v1/availability/me/schedule',
+        {
+          method: 'POST',
+          body: JSON.stringify({
+            schedule: next.map((s) => ({
+              dayOfWeek: s.dayOfWeek,
+              startTime: s.startTime,
+              endTime: s.endTime,
+            })),
+          }),
+        },
+      );
+      setSchedule(Array.isArray(data?.schedule) ? data.schedule : []);
+    } catch (err) {
+      console.error('Failed to remove slot:', err);
+    } finally {
+      setShowModal(false);
+      setSelectedSlot(null);
+    }
   };
 
   const isHourInRange = (dayOfWeek: number, hour: number) => {
     const slot = getSlotForDay(dayOfWeek);
     if (!slot) return false;
-    
+
     const [startHour] = slot.startTime.split(':').map(Number);
     const [endHour] = slot.endTime.split(':').map(Number);
-    
+
     return hour >= startHour && hour < endHour;
   };
 
   const formatTime = (time: string) => {
     const [hours, minutes] = time.split(':');
     const hour = parseInt(hours);
-    const ampm = hour >= 12 ? 'م' : 'ص';
+    const isAm = hour < 12;
     const displayHour = hour > 12 ? hour - 12 : (hour === 0 ? 12 : hour);
-    return `${displayHour}:${minutes} ${ampm}`;
+    return `${displayHour}:${minutes}${ampmSuffix}${isAm ? amLabel : pmLabel}`;
   };
 
   if (loading) {
     return (
-      <div className="flex items-center justify-center h-64">
+      <div
+        className="flex flex-col items-center justify-center h-64 gap-3"
+        role="status"
+        aria-live="polite"
+      >
         <div className="w-8 h-8 border-4 border-[var(--border)] border-t-[var(--accent)] rounded-full animate-spin" />
+        <p className="text-sm" style={{ color: 'var(--text-muted)' }}>
+          {t('dashboard.schedule.loading')}
+        </p>
+      </div>
+    );
+  }
+
+  if (loadError) {
+    return (
+      <div className="glass rounded-2xl p-8 text-center" role="alert">
+        <p className="text-base font-semibold mb-1" style={{ color: 'var(--text)' }}>
+          {t('dashboard.schedule.errorLoad')}
+        </p>
+        <p className="text-sm" style={{ color: 'var(--text-muted)' }}>{loadError}</p>
       </div>
     );
   }
@@ -158,10 +232,10 @@ export default function SchedulePage() {
       <div className="flex items-center justify-between">
         <div>
           <h1 className="text-3xl font-display font-bold" style={{ color: 'var(--text)' }}>
-            الجدول الأسبوعي
+            {t('dashboard.schedule.title')}
           </h1>
           <p className="text-sm mt-1" style={{ color: 'var(--text-muted)' }}>
-            حدد ساعات عملك لكل يوم
+            {t('dashboard.schedule.subtitle')}
           </p>
         </div>
       </div>
@@ -170,32 +244,32 @@ export default function SchedulePage() {
       <div className="glass rounded-xl p-4 flex items-center gap-6">
         <div className="flex items-center gap-2">
           <div className="w-4 h-4 rounded" style={{ background: 'var(--accent)' }} />
-          <span className="text-sm" style={{ color: 'var(--text-muted)' }}>ساعات العمل</span>
+          <span className="text-sm" style={{ color: 'var(--text-muted)' }}>{t('dashboard.schedule.legendWorking')}</span>
         </div>
         <div className="flex items-center gap-2">
           <div className="w-4 h-4 rounded" style={{ background: 'var(--surface-hi)' }} />
-          <span className="text-sm" style={{ color: 'var(--text-muted)' }}>غير متاح</span>
+          <span className="text-sm" style={{ color: 'var(--text-muted)' }}>{t('dashboard.schedule.legendClosed')}</span>
         </div>
         <span className="text-sm" style={{ color: 'var(--text-dim)' }}>
-          | انقر على أي يوم لتعيين أو تعديل ساعات العمل
+          {t('dashboard.schedule.legendHint')}
         </span>
       </div>
 
       {/* Custom 7-Column Week Grid */}
       <div className="glass rounded-2xl overflow-hidden">
         {/* Day Headers */}
-        <div 
+        <div
           className="grid grid-cols-7 border-b border-[var(--border)]"
           style={{ background: 'var(--surface-hi)' }}
         >
           {/* Time column header */}
           <div className="p-4 text-center text-sm font-medium" style={{ color: 'var(--text-dim)' }}>
-            الوقت
+            {t('dashboard.schedule.timeColumn')}
           </div>
-          {DAYS_SHORT_AR.map((day, index) => {
+          {daysShort.map((day, index) => {
             const slot = getSlotForDay(index);
             return (
-              <div 
+              <div
                 key={index}
                 className="p-4 text-center border-r border-[var(--border)] last:border-r-0"
               >
@@ -208,7 +282,7 @@ export default function SchedulePage() {
                   </p>
                 ) : (
                   <p className="text-xs mt-1" style={{ color: 'var(--text-dim)' }}>
-                    مغلق
+                    {t('dashboard.schedule.closed')}
                   </p>
                 )}
               </div>
@@ -218,11 +292,11 @@ export default function SchedulePage() {
 
         {/* Time Grid */}
         <div className="divide-y divide-[var(--border)]">
-          {HOURS.map((hourLabel, hourIndex) => {
+          {hours.map((hourLabel, hourIndex) => {
             const actualHour = hourIndex + 6;
-            
+
             return (
-              <div 
+              <div
                 key={hourIndex}
                 className="grid grid-cols-7 min-h-[48px]"
               >
@@ -230,13 +304,13 @@ export default function SchedulePage() {
                 <div className="p-2 text-center text-xs font-mono flex items-center justify-center" style={{ color: 'var(--text-dim)' }}>
                   {hourLabel}
                 </div>
-                
+
                 {/* Day cells */}
-                {DAYS_AR.map((_, dayIndex) => {
+                {days.map((_, dayIndex) => {
                   const slot = getSlotForDay(dayIndex);
                   const isInRange = isHourInRange(dayIndex, actualHour);
                   const isStart = slot && slot.startTime === `${actualHour.toString().padStart(2, '0')}:00`;
-                  
+
                   return (
                     <div
                       key={dayIndex}
@@ -249,7 +323,7 @@ export default function SchedulePage() {
                       }}
                     >
                       {isStart && slot && (
-                        <div 
+                        <div
                           className="absolute inset-0 rounded-lg flex items-center justify-center z-10"
                           style={{ background: 'var(--accent)' }}
                         >
@@ -274,13 +348,13 @@ export default function SchedulePage() {
       {schedule.length > 0 && (
         <div className="glass rounded-2xl p-6">
           <h3 className="text-lg font-display font-semibold mb-4" style={{ color: 'var(--text)' }}>
-            ملخص الأسبوع
+            {t('dashboard.schedule.summaryTitle')}
           </h3>
           <div className="grid grid-cols-2 md:grid-cols-4 lg:grid-cols-7 gap-3">
-            {DAYS_AR.map((day, index) => {
+            {days.map((day, index) => {
               const slot = getSlotForDay(index);
               return (
-                <div 
+                <div
                   key={index}
                   className="p-3 rounded-xl text-center"
                   style={{ background: 'var(--surface-hi)' }}
@@ -291,7 +365,7 @@ export default function SchedulePage() {
                       {slot.startTime} - {slot.endTime}
                     </p>
                   ) : (
-                    <p className="text-sm" style={{ color: 'var(--text-dim)' }}>مغلق</p>
+                    <p className="text-sm" style={{ color: 'var(--text-dim)' }}>{t('dashboard.schedule.closed')}</p>
                   )}
                 </div>
               );
@@ -317,12 +391,12 @@ export default function SchedulePage() {
               exit={{ opacity: 0, scale: 0.95, y: 20 }}
               className="fixed inset-0 z-50 flex items-center justify-center p-4 pointer-events-none"
             >
-              <div 
+              <div
                 className="w-full max-w-sm rounded-2xl p-6 pointer-events-auto"
                 style={{ background: 'var(--surface)' }}
               >
                 <div className="text-center mb-6">
-                  <div 
+                  <div
                     className="w-12 h-12 rounded-xl mx-auto mb-3 flex items-center justify-center"
                     style={{ background: 'var(--accent)' }}
                   >
@@ -331,10 +405,10 @@ export default function SchedulePage() {
                     </svg>
                   </div>
                   <h3 className="text-xl font-display font-bold" style={{ color: 'var(--text)' }}>
-                    {DAYS_AR[selectedSlot.dayOfWeek]}
+                    {days[selectedSlot.dayOfWeek]}
                   </h3>
                   <p className="text-sm mt-1" style={{ color: 'var(--text-muted)' }}>
-                    {getSlotForDay(selectedSlot.dayOfWeek) ? 'تعديل ساعات العمل' : 'تعيين ساعات العمل'}
+                    {getSlotForDay(selectedSlot.dayOfWeek) ? t('dashboard.schedule.editHours') : t('dashboard.schedule.setHours')}
                   </p>
                 </div>
 
@@ -342,15 +416,15 @@ export default function SchedulePage() {
                   <div className="grid grid-cols-2 gap-4">
                     <div>
                       <label className="block text-sm font-medium mb-1.5" style={{ color: 'var(--text-muted)' }}>
-                        من
+                        {t('dashboard.schedule.startLabel')}
                       </label>
                       <input
                         type="time"
                         value={slotForm.startTime}
                         onChange={(e) => setSlotForm({ ...slotForm, startTime: e.target.value })}
                         className="w-full px-4 py-2.5 rounded-xl outline-none transition-colors font-mono"
-                        style={{ 
-                          background: 'var(--surface-hi)', 
+                        style={{
+                          background: 'var(--surface-hi)',
                           border: '1px solid var(--border)',
                           color: 'var(--text)'
                         }}
@@ -358,15 +432,15 @@ export default function SchedulePage() {
                     </div>
                     <div>
                       <label className="block text-sm font-medium mb-1.5" style={{ color: 'var(--text-muted)' }}>
-                        إلى
+                        {t('dashboard.schedule.endLabel')}
                       </label>
                       <input
                         type="time"
                         value={slotForm.endTime}
                         onChange={(e) => setSlotForm({ ...slotForm, endTime: e.target.value })}
                         className="w-full px-4 py-2.5 rounded-xl outline-none transition-colors font-mono"
-                        style={{ 
-                          background: 'var(--surface-hi)', 
+                        style={{
+                          background: 'var(--surface-hi)',
                           border: '1px solid var(--border)',
                           color: 'var(--text)'
                         }}
@@ -380,12 +454,12 @@ export default function SchedulePage() {
                         type="button"
                         onClick={() => handleRemoveSlot(selectedSlot.dayOfWeek)}
                         className="flex-1 px-4 py-2.5 rounded-xl font-medium transition-colors"
-                        style={{ 
-                          background: 'rgba(239, 68, 68, 0.15)', 
+                        style={{
+                          background: 'rgba(239, 68, 68, 0.15)',
                           color: '#ef4444'
                         }}
                       >
-                        حذف
+                        {t('dashboard.schedule.delete')}
                       </button>
                     )}
                     <button
@@ -395,7 +469,7 @@ export default function SchedulePage() {
                       className="flex-1 px-4 py-2.5 rounded-xl font-medium transition-all disabled:opacity-50"
                       style={{ background: 'var(--accent)', color: 'white' }}
                     >
-                      {saving ? 'جاري...' : 'حفظ'}
+                      {saving ? t('dashboard.schedule.saving') : t('dashboard.schedule.save')}
                     </button>
                   </div>
                 </div>

@@ -11,41 +11,27 @@
 
 import { useEffect, useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
+import { apiRequest } from "@/lib/api";
+import { usePreferences } from "@/contexts/PreferencesContext";
+
 interface Booking {
   id: string;
   startTime: string;
   endTime: string;
   status: "PENDING_PAYMENT" | "CONFIRMED" | "COMPLETED" | "CANCELLED" | "NO_SHOW";
   priceAtBooking: string | number;
-  service?: { id: string; title: string; durationMinutes: number };
-  customer?: { id: string; name: string };
+  service?: { id?: string; title: string; durationMinutes: number };
+  customer?: { id?: string; name: string };
 }
 
-const STATUS_META: Record<
-  Booking["status"],
-  { label: string; color: string; icon: any }
-> = {
-  PENDING_PAYMENT: { label: "بانتظار الدفع", color: "#FBBF24", icon: '<svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg>',},
-  CONFIRMED: { label: "مؤكدة", color: "#34D399", icon: '<svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><circle cx="12" cy="12" r="10"/><polyline points="9 12 12 15 16 10"/></svg>',},
-  COMPLETED: { label: "مكتملة", color: "#9B98A5", icon: '<svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><circle cx="12" cy="12" r="10"/><polyline points="9 12 12 15 16 10"/></svg>',},
-  CANCELLED: { label: "ملغاة", color: "#EF4444", icon: '<svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><circle cx="12" cy="12" r="10"/><line x1="15" y1="9" x2="9" y2="15"/><line x1="9" y1="9" x2="15" y2="15"/></svg>',},
-  NO_SHOW: { label: "لم يحضر", color: "#F87171", icon: '<svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12.01" y2="16"/></svg>',},
+type StatusMeta = { color: string; icon: string };
+const STATUS_COLORS: Record<Booking["status"], StatusMeta> = {
+  PENDING_PAYMENT: { color: "#FBBF24", icon: '<svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg>' },
+  CONFIRMED: { color: "#34D399", icon: '<svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><circle cx="12" cy="12" r="10"/><polyline points="9 12 12 15 16 10"/></svg>' },
+  COMPLETED: { color: "#9B98A5", icon: '<svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><circle cx="12" cy="12" r="10"/><polyline points="9 12 12 15 16 10"/></svg>' },
+  CANCELLED: { color: "#EF4444", icon: '<svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><circle cx="12" cy="12" r="10"/><line x1="15" y1="9" x2="9" y2="15"/><line x1="9" y1="9" x2="15" y2="15"/></svg>' },
+  NO_SHOW: { color: "#F87171", icon: '<svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12.01" y2="16"/></svg>' },
 };
-
-function formatTime(iso: string): string {
-  return new Date(iso).toLocaleTimeString("ar", {
-    hour: "2-digit",
-    minute: "2-digit",
-  });
-}
-
-function formatDay(iso: string): string {
-  return new Date(iso).toLocaleDateString("ar", {
-    weekday: "long",
-    day: "numeric",
-    month: "long",
-  });
-}
 
 function groupByDay(bookings: Booking[]): Record<string, Booking[]> {
   const groups: Record<string, Booking[]> = {};
@@ -66,29 +52,61 @@ function groupByDay(bookings: Booking[]): Record<string, Booking[]> {
 
 export default function VendorBookingsPage() {
   const router = useRouter();
+  const { t, locale } = usePreferences();
   const [bookings, setBookings] = useState<Booking[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [cancellingId, setCancellingId] = useState<string | null>(null);
   const [filter, setFilter] = useState<"all" | "active">("active");
 
+  const intlLocale = locale === "ar" ? "ar-SA" : "en-US";
+
+  const formatTime = (iso: string): string =>
+    new Date(iso).toLocaleTimeString(intlLocale, {
+      hour: "2-digit",
+      minute: "2-digit",
+    });
+
+  const formatDay = (iso: string): string =>
+    new Date(iso).toLocaleDateString(intlLocale, {
+      weekday: "long",
+      day: "numeric",
+      month: "long",
+    });
+
+  const statusLabel = (status: Booking["status"]): string => {
+    switch (status) {
+      case "PENDING_PAYMENT": return t("bookings.statusPendingPayment");
+      case "CONFIRMED": return t("bookings.statusConfirmed");
+      case "COMPLETED": return t("bookings.statusCompleted");
+      case "CANCELLED": return t("bookings.statusCancelled");
+      case "NO_SHOW": return t("bookings.statusNoShow");
+    }
+  };
+
   useEffect(() => {
     let cancelled = false;
     (async () => {
       try {
-        const res = await fetch(
-          `${process.env.NEXT_PUBLIC_API_URL}/bookings/me`,
-          { credentials: "include" },
-        );
+        const res = await apiRequest("/api/v1/bookings/me");
         if (res.status === 401) {
           router.push("/login?redirect=/dashboard/bookings");
           return;
         }
-        if (!res.ok) throw new Error(`HTTP ${res.status}`);
+        if (!res.ok) {
+          let msg = `HTTP ${res.status}`;
+          try {
+            const j = await res.json();
+            if (j?.message) msg = j.message;
+          } catch {
+            /* response body wasn't JSON */
+          }
+          throw new Error(msg);
+        }
         const data: Booking[] = await res.json();
         if (!cancelled) setBookings(data);
       } catch (e: any) {
-        if (!cancelled) setError(e.message || "تعذر التحميل");
+        if (!cancelled) setError(e.message || t("dashboard.bookings.errorLoad"));
       } finally {
         if (!cancelled) setLoading(false);
       }
@@ -96,7 +114,7 @@ export default function VendorBookingsPage() {
     return () => {
       cancelled = true;
     };
-  }, [router]);
+  }, [router, t]);
 
   const visible = useMemo(() => {
     if (filter === "active") {
@@ -112,28 +130,36 @@ export default function VendorBookingsPage() {
 
   async function cancel(b: Booking) {
     const reason = window.prompt(
-      `إلغاء حجز "${b.service?.title}" للعميل ${b.customer?.name ?? ""}؟\n\nسبب الإلغاء:`,
+      t("dashboard.bookings.cancelPrompt", {
+        title: b.service?.title ?? "",
+        customer: b.customer?.name ?? "",
+      }),
     );
     if (!reason?.trim()) return;
     setCancellingId(b.id);
     try {
-      const res = await fetch(
-        `${process.env.NEXT_PUBLIC_API_URL}/bookings/${b.id}/cancel`,
-        {
-          method: "POST",
-          credentials: "include",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ reason: reason.trim() }),
-        },
-      );
+      const res = await apiRequest(`/api/v1/bookings/${b.id}/cancel`, {
+        method: "POST",
+        body: JSON.stringify({ reason: reason.trim() }),
+      });
       if (!res.ok) {
         const j = await res.json().catch(() => ({}));
         throw new Error(j.message || `HTTP ${res.status}`);
       }
-      const updated: Booking = await res.json();
-      setBookings((prev) => prev.map((x) => (x.id === b.id ? updated : x)));
+      const updated = await res.json();
+      setBookings((prev) =>
+        prev.map((x) =>
+          x.id === b.id
+            ? {
+                ...x,
+                status: updated.status ?? "CANCELLED",
+                cancellationReason: updated.cancellationReason ?? reason.trim(),
+              }
+            : x,
+        ),
+      );
     } catch (e: any) {
-      window.alert(`تعذر الإلغاء: ${e.message}`);
+      window.alert(`${t("dashboard.bookings.cancelErrorPrefix")} ${e.message}`);
     } finally {
       setCancellingId(null);
     }
@@ -147,19 +173,23 @@ export default function VendorBookingsPage() {
     (b) => b.status === "CANCELLED",
   ).length;
 
+  const filterLabels: Record<"active" | "all", string> = {
+    active: t("dashboard.bookings.filter.active"),
+    all: t("dashboard.bookings.filter.all"),
+  };
+
   return (
     <div className="space-y-6">
       {/* Header */}
       <div className="flex items-center justify-between flex-wrap gap-3">
         <div>
-          <h1 className="text-2xl font-bold tracking-tight">الحجوزات</h1>
+          <h1 className="text-2xl font-bold tracking-tight">{t("dashboard.bookings.title")}</h1>
           <p className="text-xs opacity-60 mt-1">
-            {activeCount} نشطة · {cancelledCount} ملغاة
+            {t("dashboard.bookings.countSummary", { active: activeCount, cancelled: cancelledCount })}
           </p>
         </div>
         <div className="flex gap-2">
           {(["active", "all"] as const).map((k) => {
-            const labels = { active: "النشطة", all: "الكل" };
             const active = filter === k;
             return (
               <button
@@ -172,7 +202,7 @@ export default function VendorBookingsPage() {
                   border: `1px solid ${active ? "var(--accent)" : "var(--border)"}`,
                 }}
               >
-                {labels[k]}
+                {filterLabels[k]}
               </button>
             );
           })}
@@ -204,9 +234,9 @@ export default function VendorBookingsPage() {
           }}
         >
           <svg width="36" height="36" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><rect x="3" y="4" width="18" height="18" rx="2" ry="2"/><line x1="16" y1="2" x2="16" y2="6"/><line x1="8" y1="2" x2="8" y2="6"/><line x1="3" y1="10" x2="21" y2="10"/></svg>
-          <h3 className="text-base font-bold mb-1">لا توجد حجوزات</h3>
+          <h3 className="text-base font-bold mb-1">{t("dashboard.bookings.emptyTitle")}</h3>
           <p className="text-xs opacity-60">
-            ستظهر هنا حجوزات العملاء عند وصولها
+            {t("dashboard.bookings.emptySubtitle")}
           </p>
         </div>
       ) : (
@@ -219,14 +249,13 @@ export default function VendorBookingsPage() {
                   {formatDay(items[0].startTime)}
                 </h2>
                 <span className="text-xs opacity-40">
-                  · {items.length} حجز
+                  · {t("dashboard.bookings.dayCount", { n: items.length })}
                 </span>
               </div>
 
               <div className="space-y-2">
                 {items.map((b) => {
-                  const meta = STATUS_META[b.status];
-                  const StatusIcon = meta.icon;
+                  const meta = STATUS_COLORS[b.status];
                   const isCancellable =
                     b.status === "PENDING_PAYMENT" ||
                     b.status === "CONFIRMED";
@@ -252,7 +281,7 @@ export default function VendorBookingsPage() {
                           {formatTime(b.startTime)}
                         </div>
                         <div className="text-[10px] opacity-50 mt-1">
-                          {b.service?.durationMinutes ?? "?"} د
+                          {b.service?.durationMinutes ?? "?"} {t("dashboard.bookings.minutesShort")}
                         </div>
                       </div>
 
@@ -268,11 +297,11 @@ export default function VendorBookingsPage() {
                             }}
                           >
                             <span dangerouslySetInnerHTML={{ __html: meta.icon }} />
-                            {meta.label}
+                            {statusLabel(b.status)}
                           </span>
                         </div>
                         <h3 className="text-sm font-bold truncate">
-                          {b.service?.title ?? "خدمة"}
+                          {b.service?.title ?? t("dashboard.bookings.serviceFallback")}
                         </h3>
                         <div className="flex items-center gap-3 mt-1.5 text-xs opacity-60">
                           <span className="inline-flex items-center gap-1">
@@ -281,7 +310,7 @@ export default function VendorBookingsPage() {
                           </span>
                           <span className="inline-flex items-center gap-1">
                             <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><circle cx="12" cy="12" r="10"/><line x1="12" y1="6" x2="12" y2="22"/><path d="M17 5H9.5a3.5 3.5 0 000 7h5a3.5 3.5 0 010 7H6"/></svg>
-                            {Number(b.priceAtBooking).toFixed(2)} ر.س
+                            {Number(b.priceAtBooking).toFixed(2)} {t("dashboard.layout.currencySar").trim()}
                           </span>
                         </div>
                       </div>
@@ -302,7 +331,7 @@ export default function VendorBookingsPage() {
                           ) : (
                             <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><circle cx="12" cy="12" r="10"/><line x1="15" y1="9" x2="9" y2="15"/><line x1="9" y1="9" x2="15" y2="15"/></svg>
                           )}
-                          إلغاء
+                          {t("dashboard.bookings.cancel")}
                         </button>
                       )}
                     </div>

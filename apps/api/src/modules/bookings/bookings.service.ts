@@ -43,6 +43,18 @@ import { CancelBookingDto } from './dto/cancel-booking.dto';
 
 const HOLD_MINUTES = 5;
 const CANCELLATION_WINDOW_HOURS = 24;
+const DEFAULT_COMMISSION_RATE = new Prisma.Decimal('0.10');
+
+/** Shape returned by getVendorDashboard. */
+export interface VendorDashboardDto {
+  summary: { todayBookings: number; confirmedRevenue: number; cancellations: number };
+  topServices: { serviceId: string; title: string; bookings: number; revenue: number }[];
+  upcomingBookings: Array<{
+    id: string; startTime: Date; endTime: Date; status: BookingStatus;
+    service: { id: string; title: string };
+    customer: { id: string; name: string };
+  }>;
+}
 
 @Injectable()
 export class BookingsService {
@@ -117,8 +129,19 @@ export class BookingsService {
       throw new ConflictException('Slot is no longer available');
     }
 
-    /* Compute commission (10% flat for now, will move to a config). */
-    const commissionAmount = service.price.mul(0.10).toDecimalPlaces(2);
+    /* Snapshot the current global rate onto this booking. Decimal arithmetic
+     * keeps both the configured fraction and the persisted amount exact.
+     * The fallback preserves the historical 10% behavior if the singleton
+     * is unexpectedly absent; existing bookings are never recalculated. */
+    const platformSettings = await this.prisma.platformSettings.findUnique({
+      where: { id: 1 },
+      select: { commissionRate: true },
+    });
+    const commissionRate =
+      platformSettings?.commissionRate ?? DEFAULT_COMMISSION_RATE;
+    const commissionAmount = service.price
+      .mul(commissionRate)
+      .toDecimalPlaces(2);
 
     /* Attempt insert. The EXCLUDE constraint is the authoritative
      * safety net — if two requests slip past the pre-check, one of
@@ -381,6 +404,68 @@ export class BookingsService {
     });
   }
 
+  /* VENDOR DASHBOARD (B2 Task 4). "Today" is the UTC calendar day
+   * containing `now` — bucketed in UTC on purpose so the metric is
+   * stable across DST and consistent regardless of vendor tz.
+   * Limit clamped to [1, 20] defensively. Tenant isolation: every
+   * read is gated on the VendorProfile owned by `userId`. */
+  async getVendorDashboard(userId: string, limit: number): Promise<VendorDashboardDto> {
+    const safeLimit = Math.min(Math.max(Math.trunc(limit || 5), 1), 20);
+
+    const vendor = await this.prisma.vendorProfile.findFirst({ where: { userId }, select: { id: true } });
+    if (!vendor) {
+      return {
+        summary: { todayBookings: 0, confirmedRevenue: 0, cancellations: 0 },
+        topServices: [],
+        upcomingBookings: [],
+      };
+    }
+
+    const now = new Date();
+    const dayStart = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate(), 0, 0, 0, 0));
+    const dayEnd = new Date(dayStart.getTime() + 24 * 60 * 60_000);
+
+    const [todayBookings, confirmedAgg, cancellations] = await Promise.all([
+      this.prisma.booking.count({
+        where: { vendorId: vendor.id, startTime: { gte: dayStart, lt: dayEnd } },
+      }),
+      this.prisma.booking.aggregate({
+        where: { vendorId: vendor.id, status: BookingStatus.CONFIRMED }, _sum: { priceAtBooking: true },
+      }),
+      this.prisma.booking.count({ where: { vendorId: vendor.id, status: BookingStatus.CANCELLED } }),
+    ]);
+    const confirmedRevenue = confirmedAgg._sum.priceAtBooking ? Number(confirmedAgg._sum.priceAtBooking) : 0;
+
+    /* Top services: CONFIRMED-only, ordered by revenue then bookings. */
+    const topRows = await this.prisma.booking.groupBy({
+      by: ['serviceId'],
+      where: { vendorId: vendor.id, status: BookingStatus.CONFIRMED },
+      _count: { _all: true }, _sum: { priceAtBooking: true },
+      orderBy: [{ _sum: { priceAtBooking: 'desc' } }, { _count: { serviceId: 'desc' } }],
+      take: safeLimit,
+    });
+    const serviceIds = topRows.map((r) => r.serviceId);
+    const services = serviceIds.length
+      ? await this.prisma.service.findMany({ where: { id: { in: serviceIds } }, select: { id: true, title: true } })
+      : [];
+    const titleById = new Map(services.map((s) => [s.id, s.title]));
+    const topServices = topRows.map((r) => ({
+      serviceId: r.serviceId,
+      title: titleById.get(r.serviceId) ?? '',
+      bookings: r._count._all,
+      revenue: Number(r._sum.priceAtBooking ?? 0),
+    }));
+
+    /* Upcoming: CONFIRMED + future, soonest first. */
+    const upcomingBookings = await this.prisma.booking.findMany({
+      where: { vendorId: vendor.id, status: BookingStatus.CONFIRMED, startTime: { gte: now } },
+      orderBy: { startTime: 'asc' }, take: safeLimit,
+      include: { service: { select: { id: true, title: true } }, customer: { select: { id: true, name: true } } },
+    });
+
+    return { summary: { todayBookings, confirmedRevenue, cancellations }, topServices, upcomingBookings };
+  }
+
   getHoldExpiryMinutes(): number {
     return HOLD_MINUTES;
   }
@@ -390,17 +475,80 @@ export class BookingsService {
      ═══════════════════════════════════════════ */
 
   /**
-   * Prisma throws a wrapped error when a Postgres constraint fails.
-   * We look for the EXCLUDE rule's name so we can identify overlap
-   * specifically.
+   * Detect the `booking_no_overlap` EXCLUDE constraint violation added
+   * by migration 20260705120000 and translate it to a clean 409.
+   *
+   * The Postgres server returns SQLSTATE `23P01` (exclusion_violation)
+   * with the constraint name (`booking_no_overlap`) embedded in the
+   * message or in `meta.constraint` / `meta.code` depending on how
+   * the Prisma engine wraps the response. In Prisma 5 the engine can
+   * surface this as a `PrismaClientUnknownRequestError` whose top
+   * level message is sanitised and no longer contains the constraint
+   * name; in that case the diagnostic survives only in `meta.code`
+   * (23P01) or in a nested `cause`.
+   *
+   * To stay narrow and avoid swallowing unrelated Prisma errors we
+   * only recognise three signals:
+   *   1. the literal constraint name `booking_no_overlap`,
+   *   2. PostgreSQL SQLSTATE `23P01` (the only code that means
+   *      exclusion_violation),
+   *   3. the exact Postgres wording
+   *      `conflicting key value violates exclusion constraint`.
+   *
+   * The walk is bounded: depth ≤ 3, WeakSet cycle guard, and we only
+   * read well-known scalar keys (`message`, `code`, `cause`, `meta`,
+   * `meta.code`, `meta.constraint`, `meta.message`) — never an
+   * unbounded enumerable iteration of arbitrary properties. Anything
+   * that does not match one of the three signals is rethrown unchanged
+   * by `createBooking`.
    */
   private isOverlapError(e: unknown): boolean {
     if (typeof e !== 'object' || e === null) return false;
-    const msg = (e as { message?: string }).message ?? '';
-    return (
-      msg.includes('booking_no_overlap') ||
-      msg.includes('conflicting key value violates exclusion constraint')
-    );
+
+    const TEXT_TOKENS = [
+      'booking_no_overlap',
+      'conflicting key value violates exclusion constraint',
+    ] as const;
+    const PG_SQLSTATE_EXCLUSION = '23P01';
+
+    const matchesText = (s: unknown): boolean =>
+      typeof s === 'string' && TEXT_TOKENS.some((t) => s.includes(t));
+
+    const seen = new WeakSet<object>();
+    const walk = (err: unknown, depth: number): boolean => {
+      if (depth > 3) return false;
+      if (typeof err !== 'object' || err === null) return false;
+      const ref = err as object;
+      if (seen.has(ref)) return false;
+      seen.add(ref);
+
+      const o = err as Record<string, unknown>;
+
+      // 1. Standard Error.message.
+      if (matchesText(o.message)) return true;
+
+      // 2. SQLSTATE 23P01 at top level (Prisma engine sometimes sets
+      //    `.code` to the Postgres SQLSTATE for unknown errors).
+      if (o.code === PG_SQLSTATE_EXCLUSION) return true;
+
+      // 3. Bounded inspection of Prisma's `.meta` object — known keys only.
+      const meta = o.meta;
+      if (meta !== null && typeof meta === 'object') {
+        const m = meta as Record<string, unknown>;
+        if (m.code === PG_SQLSTATE_EXCLUSION) return true;
+        if (matchesText(m.constraint)) return true;
+        if (matchesText(m.message)) return true;
+      }
+
+      // 4. Nested `.cause` chain (Prisma wraps the original PG error).
+      if (o.cause !== undefined && o.cause !== null) {
+        if (walk(o.cause, depth + 1)) return true;
+      }
+
+      return false;
+    };
+
+    return walk(e, 0);
   }
 
   /**

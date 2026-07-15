@@ -1,5 +1,9 @@
 import { Test, TestingModule } from '@nestjs/testing';
-import { ConflictException, UnauthorizedException } from '@nestjs/common';
+import {
+  BadRequestException,
+  ConflictException,
+  UnauthorizedException,
+} from '@nestjs/common';
 import { JwtService } from '@nestjs/jwt';
 import { AuthService } from './auth.service';
 import { PrismaService } from '../../shared/modules/prisma/prisma.service';
@@ -10,12 +14,13 @@ import { prisma, cleanDatabase, disconnectPrisma } from '../../test/setup';
 describe('AuthService', () => {
   let authService: AuthService;
   let passwordService: PasswordService;
+  let testModule: TestingModule;
 
   beforeEach(async () => {
     // Clean DB before each test
     await cleanDatabase();
 
-    const module: TestingModule = await Test.createTestingModule({
+    testModule = await Test.createTestingModule({
       providers: [
         AuthService,
         {
@@ -32,8 +37,8 @@ describe('AuthService', () => {
       ],
     }).compile();
 
-    authService = module.get<AuthService>(AuthService);
-    passwordService = module.get<PasswordService>(PasswordService);
+    authService = testModule.get<AuthService>(AuthService);
+    passwordService = testModule.get<PasswordService>(PasswordService);
   });
 
   afterAll(async () => {
@@ -343,6 +348,52 @@ describe('AuthService', () => {
         where: { userId: user.id },
       });
       expect(refreshTokens.every((t) => t.revokedAt !== null)).toBe(true);
+    });
+  });
+
+  describe('demoGoogleLogin', () => {
+    const DEMO_EMAIL = 'demo.customer@servicehub.local';
+
+    it('(TEST 9) creates the demo CUSTOMER idempotently with null passwordHash and returns tokens + authProvider', async () => {
+      // Replace the static JwtService mock with unique tokens so two
+      // sign() calls don't collide on the RefreshToken unique index.
+      const jwtMock = testModule.get<JwtService>(JwtService) as unknown as {
+        sign: jest.Mock;
+      };
+      let n = 0;
+      jwtMock.sign.mockImplementation(() => `mocked-demo-token-${++n}`);
+
+      const first = await authService.demoGoogleLogin(DEMO_EMAIL);
+      expect(first.user).toMatchObject({
+        email: DEMO_EMAIL,
+        name: 'Demo Customer',
+        role: UserRole.CUSTOMER,
+      });
+      expect(first.accessToken).toBeDefined();
+      expect(first.refreshToken).toBeDefined();
+      expect(first.authProvider).toBe('demo-google');
+
+      // DB state: passwordHash is null, role is CUSTOMER
+      const dbUser = await prisma.user.findUnique({ where: { email: DEMO_EMAIL } });
+      expect(dbUser?.passwordHash).toBeNull();
+      expect(dbUser?.role).toBe(UserRole.CUSTOMER);
+
+      // Idempotent: same user id, fresh tokens, no duplicate row
+      const second = await authService.demoGoogleLogin(DEMO_EMAIL);
+      expect(second.user.id).toBe(first.user.id);
+      expect(second.refreshToken).not.toBe(first.refreshToken);
+      expect(await prisma.user.count({ where: { email: DEMO_EMAIL } })).toBe(1);
+    });
+
+    it('(TEST 10) rejects any email other than the fixed demo identity', async () => {
+      await expect(
+        authService.demoGoogleLogin('someone-else@example.com'),
+      ).rejects.toThrow(BadRequestException);
+      await expect(
+        authService.demoGoogleLogin('admin@servicehub.local'),
+      ).rejects.toThrow(/fixed local demo identity/);
+      const allUsers = await prisma.user.findMany();
+      expect(allUsers.every((u) => u.email !== 'someone-else@example.com')).toBe(true);
     });
   });
 });

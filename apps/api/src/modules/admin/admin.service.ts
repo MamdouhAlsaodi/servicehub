@@ -28,11 +28,76 @@ import {
 import { PrismaService } from '../../shared/modules/prisma/prisma.service';
 import { BookingStatus, PaymentStatus, VendorStatus, Prisma } from '@prisma/client';
 
+const PLATFORM_SETTINGS_ID = 1;
+const DEFAULT_COMMISSION_RATE = new Prisma.Decimal('0.10');
+const COMMISSION_VALIDATION_MESSAGE =
+  'commissionRatePercent must be from 0 to 100 with at most four fractional digits';
+
 @Injectable()
 export class AdminService {
   private readonly logger = new Logger(AdminService.name);
 
   constructor(private readonly prisma: PrismaService) {}
+
+  /* ═══════════════════════════════════════════
+     PLATFORM SETTINGS
+     ═══════════════════════════════════════════ */
+
+  async getPlatformSettings() {
+    const existing = await this.prisma.platformSettings.findUnique({
+      where: { id: PLATFORM_SETTINGS_ID },
+      select: { commissionRate: true, updatedAt: true },
+    });
+    const settings =
+      existing ??
+      (await this.prisma.platformSettings.upsert({
+        where: { id: PLATFORM_SETTINGS_ID },
+        update: {},
+        create: {
+          id: PLATFORM_SETTINGS_ID,
+          commissionRate: DEFAULT_COMMISSION_RATE,
+        },
+        select: { commissionRate: true, updatedAt: true },
+      }));
+
+    return {
+      commissionRatePercent: settings.commissionRate.mul(100).toNumber(),
+      updatedAt: settings.updatedAt,
+    };
+  }
+
+  async updateCommissionRate(commissionRatePercent: number) {
+    if (
+      typeof commissionRatePercent !== 'number' ||
+      !Number.isFinite(commissionRatePercent)
+    ) {
+      throw new BadRequestException(COMMISSION_VALIDATION_MESSAGE);
+    }
+
+    const percent = new Prisma.Decimal(commissionRatePercent.toString());
+    if (
+      percent.lessThan(0) ||
+      percent.greaterThan(100) ||
+      percent.decimalPlaces() > 4
+    ) {
+      throw new BadRequestException(COMMISSION_VALIDATION_MESSAGE);
+    }
+
+    const settings = await this.prisma.platformSettings.upsert({
+      where: { id: PLATFORM_SETTINGS_ID },
+      update: { commissionRate: percent.div(100) },
+      create: {
+        id: PLATFORM_SETTINGS_ID,
+        commissionRate: percent.div(100),
+      },
+      select: { commissionRate: true, updatedAt: true },
+    });
+
+    return {
+      commissionRatePercent: settings.commissionRate.mul(100).toNumber(),
+      updatedAt: settings.updatedAt,
+    };
+  }
 
   /* ═══════════════════════════════════════════
      VENDOR MANAGEMENT

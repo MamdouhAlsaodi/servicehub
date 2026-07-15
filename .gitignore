@@ -14,3 +14,7 @@ coverage/
 # TypeScript emits accidentally produced outside dist/ by failed local builds
 apps/api/scripts/*.js
 apps/api/test/helpers/*.js
+
+# Local orchestration logs and credential-smoke artifacts — never publish.
+.hermes/
+artifacts/

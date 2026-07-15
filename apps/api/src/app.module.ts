@@ -9,6 +9,7 @@ import { BookingsModule } from './modules/bookings/bookings.module';
 import { PaymentsModule } from './modules/payments/payments.module';
 import { ReviewsModule } from './modules/reviews/reviews.module';
 import { NotificationsModule } from './modules/notifications/notifications.module';
+import { RemindersModule } from './modules/reminders/reminders.module';
 import { AdminModule } from './modules/admin/admin.module';
 
 @Module({
@@ -26,6 +27,7 @@ import { AdminModule } from './modules/admin/admin.module';
     PaymentsModule,
     ReviewsModule,
     NotificationsModule,
+    RemindersModule,
     AdminModule,
   ],
 })

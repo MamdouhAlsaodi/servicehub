@@ -144,6 +144,22 @@ Switch to `PAYMENTS_PROVIDER=stripe` in production and provide
 stripe listen --forward-to localhost:3001/api/v1/payments/webhook
 ```
 
+### Demo authentication (portfolio simulation only)
+
+```
+// DEMO ONLY: Google OAuth is simulated for this portfolio project.
+// No Google credentials, external authorization, or real user identity is used.
+```
+
+The **Google (Demo)** button on `/login` does **not** talk to Google. It
+calls a local `POST /api/v1/auth/demo-google-login` endpoint that mints
+a real JWT for a fixed demo `CUSTOMER` identity. **Local only** — no
+external network call, no OAuth SDK, no client ID, no redirect, no real
+user identity. The disclosure is rendered under the button in Arabic
+(مَحاكاة لِلعرض فَقط — لا يَتِم الاتِّصال بـ Google ولا استِخدام حِساب
+حَقيقي) and English so portfolio evaluators cannot mistake the mock
+for a production OAuth integration.
+
 ## Tests
 
 ```bash

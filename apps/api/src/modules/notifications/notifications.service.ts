@@ -27,12 +27,23 @@ export type NotificationType =
   | 'BOOKING_CREATED'
   | 'PAYMENT_RECEIVED'
   | 'PAYMENT_FAILED'
-  | 'REVIEW_RECEIVED';
+  | 'REVIEW_RECEIVED'
+  | 'BOOKING_REMINDER_24H'
+  | 'BOOKING_REMINDER_1H';
 
 interface CreateInput {
   userId: string;
   type: NotificationType;
   payload: Record<string, unknown>;
+  /**
+   * Optional stable key for atomic, database-enforced deduplication.
+   * Populated by the B4 RemindersService with values like
+   * `booking:<bookingId>:reminder:<24h|1h>`. Omit (or pass null) for
+   * non-reminder notifications — the column is nullable and the
+   * unique index treats NULL as distinct, so existing call sites
+   * that never set this field keep behaving exactly as before.
+   */
+  dedupeKey?: string | null;
 }
 
 @Injectable()
@@ -46,6 +57,9 @@ export class NotificationsService {
         userId: input.userId,
         type: input.type,
         payload: input.payload as object,
+        /* Default to null so non-reminder callers do not need to know
+         * about dedupeKey. Prisma persists NULL for nullable columns. */
+        dedupeKey: input.dedupeKey ?? null,
       },
     });
   }

@@ -4,7 +4,9 @@
  * All routes guarded with JwtAuthGuard + RolesGuard(UserRole.ADMIN).
  *
  * Routes:
- *   GET  /admin/vendors/pending          — list PENDING vendors
+ *   GET   /admin/settings/commission     — read platform commission percent
+ *   PATCH /admin/settings/commission     — update platform commission percent
+ *   GET   /admin/vendors/pending          — list PENDING vendors
  *   PATCH /admin/vendors/:id/approve    — APPROVE
  *   PATCH /admin/vendors/:id/suspend    — SUSPEND
  *   GET  /admin/kpis                    — system snapshot
@@ -26,12 +28,25 @@ import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
 import { RolesGuard } from '../auth/guards/roles.guard';
 import { Roles } from '../auth/decorators/roles.decorator';
 import { UserRole } from '@prisma/client';
+import { UpdateCommissionSettingsDto } from './dto/update-commission-settings.dto';
 
 @Controller('admin')
 @UseGuards(JwtAuthGuard, RolesGuard)
 @Roles(UserRole.ADMIN)
 export class AdminController {
   constructor(private readonly adminService: AdminService) {}
+
+  /* PLATFORM SETTINGS */
+
+  @Get('settings/commission')
+  commissionSettings() {
+    return this.adminService.getPlatformSettings();
+  }
+
+  @Patch('settings/commission')
+  updateCommissionSettings(@Body() dto: UpdateCommissionSettingsDto) {
+    return this.adminService.updateCommissionRate(dto.commissionRatePercent);
+  }
 
   /* VENDOR MANAGEMENT */
 

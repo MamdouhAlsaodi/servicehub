@@ -13,6 +13,9 @@
 import { useEffect, useState, useCallback } from "react";
 import { useRouter } from "next/navigation";
 import Link from "next/link";
+import { apiRequest } from "@/lib/api";
+import { usePreferences } from "@/contexts/PreferencesContext";
+import type { MessageKey } from "@/i18n/messages";
 interface Booking {
   id: string;
   status: string;
@@ -21,12 +24,12 @@ interface Booking {
 }
 
 const STAR_VALUES = [1, 2, 3, 4, 5] as const;
-const STAR_LABELS: Record<number, string> = {
-  1: "سيئ",
-  2: "مقبول",
-  3: "جيد",
-  4: "ممتاز",
-  5: "استثنائي",
+const STAR_LABEL_KEYS: Record<number, MessageKey> = {
+  1: "review.star1",
+  2: "review.star2",
+  3: "review.star3",
+  4: "review.star4",
+  5: "review.star5",
 };
 
 export default function ReviewPage({
@@ -36,6 +39,7 @@ export default function ReviewPage({
 }) {
   const { bookingId } = params;
   const router = useRouter();
+  const { t } = usePreferences();
 
   const [booking, setBooking] = useState<Booking | null>(null);
   const [loading, setLoading] = useState(true);
@@ -63,11 +67,11 @@ export default function ReviewPage({
       setBooking(data);
       if (data.status !== "CONFIRMED") {
         setError(
-          `يمكن التقييم فقط بعد تأكيد الحجز (الحالة الحالية: ${data.status})`,
+          t("review.statusGuard", { status: data.status }),
         );
       }
     } catch (e: any) {
-      setError(e.message || "تعذر التحميل");
+      setError(e.message || t("review.errorLoad"));
     } finally {
       setLoading(false);
     }
@@ -79,25 +83,20 @@ export default function ReviewPage({
 
   async function submit() {
     if (!rating) {
-      setError("اختر تقييمًا قبل الإرسال");
+      setError(t("review.chooseRating"));
       return;
     }
     setSubmitting(true);
     setError(null);
     try {
-      const res = await fetch(
-        `${process.env.NEXT_PUBLIC_API_URL}/reviews`,
-        {
-          method: "POST",
-          credentials: "include",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            bookingId,
-            rating,
-            comment: comment.trim() || undefined,
-          }),
-        },
-      );
+      const res = await apiRequest("/api/v1/reviews", {
+        method: "POST",
+        body: JSON.stringify({
+          bookingId,
+          rating,
+          comment: comment.trim() || undefined,
+        }),
+      });
       if (!res.ok) {
         const j = await res.json().catch(() => ({}));
         throw new Error(j.message || `HTTP ${res.status}`);
@@ -105,7 +104,7 @@ export default function ReviewPage({
       setSuccess(true);
       setTimeout(() => router.push("/bookings"), 1200);
     } catch (e: any) {
-      setError(e.message || "تعذر الإرسال");
+      setError(e.message || t("review.errorSubmit"));
     } finally {
       setSubmitting(false);
     }
@@ -127,8 +126,8 @@ export default function ReviewPage({
           style={{ background: "var(--surface)", border: "1px solid var(--border)" }}
         >
           <svg width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" style={{ color: "#34D399" }}><circle cx="12" cy="12" r="10"/><polyline points="9 12 12 15 16 10"/></svg>
-          <h1 className="text-xl font-bold mb-2">شكرًا لتقييمك!</h1>
-          <p className="text-sm opacity-70">تم حفظ تقييمك بنجاح.</p>
+          <h1 className="text-xl font-bold mb-2">{t("review.thanksTitle")}</h1>
+          <p className="text-sm opacity-70">{t("review.thanksMessage")}</p>
         </div>
       </main>
     );
@@ -145,9 +144,9 @@ export default function ReviewPage({
       >
         <div className="max-w-2xl mx-auto px-6 py-3 flex items-center justify-between">
           <Link href="/bookings" className="text-xs opacity-60 hover:opacity-100">
-            إلغاء
+            {t("review.cancel")}
           </Link>
-          <h1 className="text-base font-bold">تقييم الخدمة</h1>
+          <h1 className="text-base font-bold">{t("review.pageTitle")}</h1>
           <div className="w-10" />
         </div>
       </header>
@@ -159,8 +158,8 @@ export default function ReviewPage({
         >
           {/* Booking context */}
           <div className="mb-6 pb-6" style={{ borderBottom: "1px solid var(--border)" }}>
-            <p className="text-xs opacity-60 mb-1">أنت تُقيّم</p>
-            <h2 className="text-lg font-bold">{booking?.service?.title ?? "الخدمة"}</h2>
+            <p className="text-xs opacity-60 mb-1">{t("review.reviewingLabel")}</p>
+            <h2 className="text-lg font-bold">{booking?.service?.title ?? t("review.serviceFallback")}</h2>
             <p className="text-sm opacity-60 mt-1">{booking?.vendor?.businessName ?? ""}</p>
           </div>
 
@@ -180,10 +179,14 @@ export default function ReviewPage({
 
           {/* Star picker */}
           <div className="text-center mb-6">
-            <p className="text-sm opacity-70 mb-3">كيف كانت تجربتك؟</p>
+            <p className="text-sm opacity-70 mb-3">{t("review.promptQuestion")}</p>
             <div className="flex items-center justify-center gap-2 mb-2">
               {STAR_VALUES.map((v) => {
                 const filled = hover ? hover >= v : rating >= v;
+                const starAria =
+                  v === 1
+                    ? t("review.starAriaSingular")
+                    : t("review.starAriaPlural", { n: v });
                 return (
                   <button
                     key={v}
@@ -192,7 +195,7 @@ export default function ReviewPage({
                     onMouseLeave={() => setHover(0)}
                     onClick={() => setRating(v)}
                     className="transition-transform hover:scale-110"
-                    aria-label={`${v} star${v > 1 ? "s" : ""}`}
+                    aria-label={starAria}
                   >
                     <svg
                       width="42"
@@ -211,7 +214,7 @@ export default function ReviewPage({
             </div>
             {(hover || rating) > 0 && (
               <p className="text-sm" style={{ color: "var(--accent)" }}>
-                {STAR_LABELS[hover || rating]}
+                {t(STAR_LABEL_KEYS[hover || rating])}
               </p>
             )}
           </div>
@@ -219,21 +222,21 @@ export default function ReviewPage({
           {/* Comment */}
           <div className="mb-6">
             <label className="block text-xs opacity-70 mb-2">
-              تعليقك (اختياري)
+              {t("review.commentLabel")}
             </label>
             <textarea
               value={comment}
               onChange={(e) => setComment(e.target.value)}
               rows={4}
               maxLength={2000}
-              placeholder="شارك تجربتك مع الآخرين..."
-              className="w-full px-3 py-3 rounded-2xl text-sm outline-none resize-none text-right"
+              placeholder={t("review.commentPlaceholder")}
+              className="w-full px-3 py-3 rounded-2xl text-sm outline-none resize-none text-end"
               style={{
                 background: "var(--surface-hi)",
                 border: "1px solid var(--border)",
               }}
             />
-            <p className="text-[10px] opacity-40 mt-1 text-right">
+            <p className="text-[10px] opacity-40 mt-1 text-end">
               {comment.length} / 2000
             </p>
           </div>
@@ -251,10 +254,10 @@ export default function ReviewPage({
             {submitting ? (
               <span className="inline-flex items-center gap-2">
                 <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="animate-spin"><path d="M21 12a9 9 0 11-6.219-8.56"/></svg>
-                جارٍ الإرسال…
+                {t("review.submitting")}
               </span>
             ) : (
-              "إرسال التقييم"
+              t("review.submit")
             )}
           </button>
         </div>

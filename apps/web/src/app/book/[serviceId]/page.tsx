@@ -16,6 +16,8 @@
 import { useEffect, useState, useMemo } from "react";
 import { useRouter } from "next/navigation";
 import Link from "next/link";
+import { apiRequest } from "@/lib/api";
+import { usePreferences } from "@/contexts/PreferencesContext";
 interface SlotResponse {
   date: string;
   slots: string[];
@@ -29,20 +31,25 @@ interface Service {
   vendor: { id: string; businessName: string };
 }
 
-function formatTime(iso: string): string {
-  return new Date(iso).toLocaleTimeString("ar", {
+function formatTime(iso: string, intlLocale: string): string {
+  return new Date(iso).toLocaleTimeString(intlLocale, {
     hour: "2-digit",
     minute: "2-digit",
   });
 }
 
-function formatLongDate(iso: string): string {
-  return new Date(iso + "T12:00:00Z").toLocaleDateString("ar", {
+function formatLongDate(iso: string, intlLocale: string): string {
+  return new Date(iso + "T12:00:00Z").toLocaleDateString(intlLocale, {
     weekday: "long",
     day: "numeric",
     month: "long",
     year: "numeric",
   });
+}
+
+/** Map the short Preferences locale ("ar" | "en") to a standard Intl tag. */
+function intlLocaleFor(locale: "ar" | "en"): string {
+  return locale === "ar" ? "ar-SA" : "en-US";
 }
 
 function todayIso(): string {
@@ -67,6 +74,8 @@ export default function BookServicePage({
 }) {
   const { serviceId } = params;
   const router = useRouter();
+  const { t, locale } = usePreferences();
+  const fmtLocale = intlLocaleFor(locale);
 
   const [service, setService] = useState<Service | null>(null);
   const [selectedDate, setSelectedDate] = useState<string>(todayIso());
@@ -85,14 +94,12 @@ export default function BookServicePage({
     let cancelled = false;
     (async () => {
       try {
-        const res = await fetch(
-          `${process.env.NEXT_PUBLIC_API_URL}/services/${serviceId}`,
-        );
+        const res = await apiRequest(`/api/v1/services/${serviceId}`);
         if (!res.ok) throw new Error(`HTTP ${res.status}`);
         const data: Service = await res.json();
         if (!cancelled) setService(data);
       } catch (e: any) {
-        if (!cancelled) setError(e.message || "تعذر تحميل الخدمة");
+        if (!cancelled) setError(e.message || t("book.errorLoadService"));
       } finally {
         if (!cancelled) setLoadingService(false);
       }
@@ -109,15 +116,15 @@ export default function BookServicePage({
     setError(null);
     (async () => {
       try {
-        const res = await fetch(
-          `${process.env.NEXT_PUBLIC_API_URL}/bookings/available-slots?serviceId=${serviceId}&date=${selectedDate}`,
+        const res = await apiRequest(
+          `/api/v1/bookings/available-slots?serviceId=${serviceId}&date=${selectedDate}`,
         );
         if (!res.ok) throw new Error(`HTTP ${res.status}`);
         const data: SlotResponse = await res.json();
         if (!cancelled) setSlots(data);
       } catch (e: any) {
         if (!cancelled) {
-          setError(e.message || "تعذر تحميل المواعيد");
+          setError(e.message || t("book.errorLoadSlots"));
           setSlots(null);
         }
       } finally {
@@ -134,22 +141,17 @@ export default function BookServicePage({
     setSubmitting(true);
     setError(null);
     try {
-      const res = await fetch(
-        `${process.env.NEXT_PUBLIC_API_URL}/bookings`,
-        {
-          method: "POST",
-          credentials: "include",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ serviceId, startTime: slotIso }),
-        },
-      );
+      const res = await apiRequest("/api/v1/bookings", {
+        method: "POST",
+        body: JSON.stringify({ serviceId, startTime: slotIso }),
+      });
       if (res.status === 401) {
         router.push(`/login?redirect=/book/${serviceId}`);
         return;
       }
       if (!res.ok) {
         const j = await res.json().catch(() => ({}));
-        throw new Error(j.message || "تعذر الحجز");
+        throw new Error(j.message || t("book.errorBook"));
       }
       const data = await res.json();
       setSuccess({ bookingId: data.booking.id });
@@ -158,15 +160,10 @@ export default function BookServicePage({
        * to display immediately. If this fails (network blip, etc.) the
        * user can still hit "ادفع الآن" later from /bookings. */
       try {
-        const intentRes = await fetch(
-          `${process.env.NEXT_PUBLIC_API_URL}/payments/intent`,
-          {
-            method: "POST",
-            credentials: "include",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ bookingId: data.booking.id }),
-          },
-        );
+        const intentRes = await apiRequest("/api/v1/payments/intent", {
+          method: "POST",
+          body: JSON.stringify({ bookingId: data.booking.id }),
+        });
         if (intentRes.ok) {
           const intent = await intentRes.json();
           setPaymentId(intent.paymentId);
@@ -175,7 +172,7 @@ export default function BookServicePage({
         /* non-fatal */
       }
     } catch (e: any) {
-      setError(e.message || "تعذر الحجز");
+      setError(e.message || t("book.errorBook"));
     } finally {
       setSubmitting(false);
     }
@@ -200,7 +197,7 @@ export default function BookServicePage({
       >
         <div className="text-center">
           <svg width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12.01" y2="16"/></svg>
-          <p className="text-sm opacity-80">الخدمة غير موجودة</p>
+          <p className="text-sm opacity-80">{t("book.serviceNotFound")}</p>
         </div>
       </main>
     );
@@ -220,10 +217,9 @@ export default function BookServicePage({
           }}
         >
           <svg style={{ color: "#34D399" }} className="mx-auto mb-4" width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><circle cx="12" cy="12" r="10"/><polyline points="9 12 12 15 16 10"/></svg>
-          <h1 className="text-xl font-bold mb-2">تم الحجز!</h1>
+          <h1 className="text-xl font-bold mb-2">{t("book.successTitle")}</h1>
           <p className="text-sm opacity-70 mb-6">
-            محجوز لك "{service.title}". أكمل الدفع خلال 5 دقائق لتأكيد
-            الحجز.
+            {t("book.successMessage", { title: service.title })}
           </p>
           <div className="flex flex-wrap gap-2 justify-center">
             {paymentId && (
@@ -232,7 +228,7 @@ export default function BookServicePage({
                 className="px-4 py-2 rounded-full text-sm font-bold inline-flex items-center gap-1"
                 style={{ background: "var(--accent)", color: "var(--bg)" }}
               >
-                ادفع الآن
+                {t("book.payNow")}
               </Link>
             )}
             <Link
@@ -244,7 +240,7 @@ export default function BookServicePage({
                 color: paymentId ? "var(--text)" : "var(--bg)",
               }}
             >
-              عرض حجوزاتي
+              {t("book.viewBookings")}
             </Link>
             <Link
               href="/"
@@ -254,7 +250,7 @@ export default function BookServicePage({
                 border: "1px solid var(--border)",
               }}
             >
-              الرئيسية
+              {t("nav.home")}
             </Link>
           </div>
         </div>
@@ -277,7 +273,7 @@ export default function BookServicePage({
             href="/"
             className="text-xs opacity-60 hover:opacity-100 inline-flex items-center gap-1"
           >
-            <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><line x1="5" y1="12" x2="19" y2="12"/><polyline points="12 5 19 12 12 19"/></svg> رجوع
+            <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><line x1="5" y1="12" x2="19" y2="12"/><polyline points="12 5 19 12 12 19"/></svg> {t("nav.back")}
           </Link>
 
           <div
@@ -289,7 +285,7 @@ export default function BookServicePage({
             }}
           >
             <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><rect x="3" y="4" width="18" height="18" rx="2" ry="2"/><line x1="16" y1="2" x2="16" y2="6"/><line x1="8" y1="2" x2="8" y2="6"/><line x1="3" y1="10" x2="21" y2="10"/></svg>
-            {formatLongDate(selectedDate)}
+            {formatLongDate(selectedDate, fmtLocale)}
           </div>
 
           <div
@@ -301,7 +297,7 @@ export default function BookServicePage({
             }}
           >
             <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><circle cx="12" cy="12" r="10"/><line x1="12" y1="6" x2="12" y2="22"/><path d="M17 5H9.5a3.5 3.5 0 000 7h5a3.5 3.5 0 010 7H6"/></svg>
-            {Number(service.price).toFixed(2)} ر.س
+            {Number(service.price).toFixed(2)} {t("book.currencySar")}
           </div>
         </div>
       </header>
@@ -320,13 +316,13 @@ export default function BookServicePage({
         {/* Date picker — horizontal scroll of next 14 days */}
         <div>
           <h2 className="text-xs uppercase tracking-wider opacity-50 font-bold mb-3">
-            اختر اليوم
+            {t("book.chooseDay")}
           </h2>
           <div className="flex gap-2 overflow-x-auto pb-2">
             {days.map((d) => {
               const active = d === selectedDate;
               const dayLabel = new Date(d + "T12:00:00Z").toLocaleDateString(
-                "ar",
+                fmtLocale,
                 { weekday: "short" },
               );
               const dayNum = new Date(d + "T12:00:00Z").getDate();
@@ -361,7 +357,7 @@ export default function BookServicePage({
         {/* Slots grid */}
         <div>
           <h2 className="text-xs uppercase tracking-wider opacity-50 font-bold mb-3">
-            المواعيد المتاحة
+            {t("book.availableSlots")}
           </h2>
           {loadingSlots ? (
             <div className="flex items-center justify-center py-16 opacity-50">
@@ -388,9 +384,9 @@ export default function BookServicePage({
             >
               <svg width="36" height="36" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg>
               <p className="text-sm opacity-70">
-                لا توجد مواعيد متاحة في هذا اليوم
+                {t("book.noSlotsToday")}
               </p>
-              <p className="text-xs opacity-50 mt-1">جرّب يومًا آخر</p>
+              <p className="text-xs opacity-50 mt-1">{t("book.tryAnotherDay")}</p>
             </div>
           ) : (
             <div className="grid grid-cols-3 sm:grid-cols-4 md:grid-cols-6 gap-2">
@@ -406,9 +402,9 @@ export default function BookServicePage({
                     fontFamily: "JetBrains Mono, monospace",
                   }}
                 >
-                  <div className="text-base font-bold">{formatTime(iso)}</div>
+                  <div className="text-base font-bold">{formatTime(iso, fmtLocale)}</div>
                   <div className="text-[10px] opacity-50 mt-0.5">
-                    {service.durationMinutes} د
+                    {service.durationMinutes} {t("book.slotMinutesShort")}
                   </div>
                 </button>
               ))}

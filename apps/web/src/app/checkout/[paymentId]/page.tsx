@@ -21,6 +21,8 @@
 import { useEffect, useState, useCallback } from "react";
 import { useRouter } from "next/navigation";
 import Link from "next/link";
+import { apiRequest } from "@/lib/api";
+import { usePreferences } from "@/contexts/PreferencesContext";
 interface Payment {
   id: string;
   externalId: string;
@@ -38,6 +40,7 @@ export default function CheckoutPage({
 }) {
   const { paymentId } = params;
   const router = useRouter();
+  const { t } = usePreferences();
 
   const [payment, setPayment] = useState<Payment | null>(null);
   const [loading, setLoading] = useState(true);
@@ -60,7 +63,7 @@ export default function CheckoutPage({
       const data: Payment = await res.json();
       setPayment(data);
     } catch (e: any) {
-      setError(e.message || "تعذر التحميل");
+      setError(e.message || t("checkout.errorLoad"));
     } finally {
       setLoading(false);
     }
@@ -75,18 +78,13 @@ export default function CheckoutPage({
     setSubmitting(outcome === "succeeded" ? "succeed" : "fail");
     setError(null);
     try {
-      const res = await fetch(
-        `${process.env.NEXT_PUBLIC_API_URL}/payments/mock-confirm`,
-        {
-          method: "POST",
-          credentials: "include",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            externalId: payment.externalId,
-            outcome,
-          }),
-        },
-      );
+      const res = await apiRequest("/api/v1/payments/mock-confirm", {
+        method: "POST",
+        body: JSON.stringify({
+          externalId: payment.externalId,
+          outcome,
+        }),
+      });
       if (!res.ok) {
         const j = await res.json().catch(() => ({}));
         throw new Error(j.message || `HTTP ${res.status}`);
@@ -95,7 +93,7 @@ export default function CheckoutPage({
       await fetchPayment();
       setTimeout(() => router.push("/bookings"), 1200);
     } catch (e: any) {
-      setError(e.message || "تعذر التأكيد");
+      setError(e.message || t("checkout.errorConfirm"));
     } finally {
       setSubmitting(null);
     }
@@ -127,13 +125,13 @@ export default function CheckoutPage({
         >
           <svg className="mx-auto mb-3 text-red-400" width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12.01" y2="16"/></svg>
           <p className="text-sm opacity-80">
-            {error || "الدفع غير موجود"}
+            {error || t("checkout.paymentNotFound")}
           </p>
           <Link
             href="/bookings"
             className="inline-block mt-4 text-xs opacity-60 hover:opacity-100"
           >
-            العودة للحجوزات
+            {t("checkout.backToBookings")}
           </Link>
         </div>
       </main>
@@ -154,16 +152,16 @@ export default function CheckoutPage({
           }}
         >
           <svg style={{ color: "#34D399" }} className="mx-auto mb-4" width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><circle cx="12" cy="12" r="10"/><polyline points="9 12 12 15 16 10"/></svg>
-          <h1 className="text-xl font-bold mb-2">تم الدفع بنجاح</h1>
+          <h1 className="text-xl font-bold mb-2">{t("checkout.successTitle")}</h1>
           <p className="text-sm opacity-70">
-            حجزك مؤكد. ستتلقى تفاصيل قبل الموعد.
+            {t("checkout.successMessage")}
           </p>
           <Link
             href="/bookings"
             className="inline-block mt-6 px-4 py-2 rounded-full text-sm font-bold"
             style={{ background: "var(--accent)", color: "var(--bg)" }}
           >
-            عرض حجوزاتي
+            {t("checkout.viewBookings")}
           </Link>
         </div>
       </main>
@@ -184,9 +182,9 @@ export default function CheckoutPage({
           }}
         >
           <svg style={{ color: "#EF4444" }} className="mx-auto mb-4" width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><circle cx="12" cy="12" r="10"/><line x1="15" y1="9" x2="9" y2="15"/><line x1="9" y1="9" x2="15" y2="15"/></svg>
-          <h1 className="text-xl font-bold mb-2">فشل الدفع</h1>
+          <h1 className="text-xl font-bold mb-2">{t("checkout.failedTitle")}</h1>
           <p className="text-sm opacity-70 mb-4">
-            تم إلغاء الحجز. يمكنك المحاولة مجددًا بوقت آخر.
+            {t("checkout.failedMessage")}
           </p>
           <Link
             href="/"
@@ -196,7 +194,7 @@ export default function CheckoutPage({
               color: "var(--bg)",
             }}
           >
-            ابحث عن خدمة أخرى
+            {t("checkout.findAnother")}
           </Link>
         </div>
       </main>
@@ -218,7 +216,7 @@ export default function CheckoutPage({
             href="/bookings"
             className="text-xs opacity-60 hover:opacity-100"
           >
-            إلغاء
+            {t("checkout.cancel")}
           </Link>
           <div
             className="text-xs px-3 py-1 rounded-full inline-flex items-center gap-2"
@@ -228,7 +226,7 @@ export default function CheckoutPage({
             }}
           >
             <svg className="opacity-50" width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><rect x="3" y="11" width="18" height="11" rx="2" ry="2"/><path d="M7 11V7a5 5 0 0110 0v4"/></svg>
-            دفع آمن — بيئة اختبار
+            {t("checkout.secureBanner")}
           </div>
           <div
             className="text-xs px-3 py-1 rounded-full inline-flex items-center gap-1"
@@ -251,9 +249,9 @@ export default function CheckoutPage({
             border: "1px solid var(--border)",
           }}
         >
-          <h1 className="text-xl font-bold mb-1">تأكيد الدفع</h1>
+          <h1 className="text-xl font-bold mb-1">{t("checkout.confirmTitle")}</h1>
           <p className="text-xs opacity-60 mb-6">
-            هذه بيئة اختبار — اضغط أحد الزرين لمحاكاة نتيجة الدفع
+            {t("checkout.testModeHint")}
           </p>
 
           <div
@@ -264,7 +262,7 @@ export default function CheckoutPage({
             }}
           >
             <div className="flex items-center justify-between">
-              <span className="opacity-60">المبلغ</span>
+              <span className="opacity-60">{t("checkout.amount")}</span>
               <span
                 className="font-bold"
                 style={{ fontFamily: "JetBrains Mono, monospace" }}
@@ -273,13 +271,13 @@ export default function CheckoutPage({
               </span>
             </div>
             <div className="flex items-center justify-between mt-2">
-              <span className="opacity-60">المزود</span>
+              <span className="opacity-60">{t("checkout.provider")}</span>
               <span className="text-xs px-2 py-0.5 rounded-full bg-amber-400/15 text-amber-400">
                 {payment.provider}
               </span>
             </div>
             <div className="flex items-center justify-between mt-2">
-              <span className="opacity-60">رقم العملية</span>
+              <span className="opacity-60">{t("checkout.txnId")}</span>
               <code
                 className="text-[10px] opacity-50"
                 style={{ fontFamily: "JetBrains Mono, monospace" }}
@@ -320,10 +318,10 @@ export default function CheckoutPage({
                 ) : (
                   <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><rect x="2" y="5" width="20" height="14" rx="2"/><line x1="2" y1="10" x2="22" y2="10"/></svg>
                 )}
-                <span className="font-bold text-base">ادفع (نجح)</span>
+                <span className="font-bold text-base">{t("checkout.paySucceed")}</span>
               </div>
               <div className="text-[10px] opacity-70">
-                Stripe.test_mode → succeeded
+                {t("checkout.stripeSucceedTrace")}
               </div>
             </button>
 
@@ -344,16 +342,16 @@ export default function CheckoutPage({
                 ) : (
                   <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><circle cx="12" cy="12" r="10"/><line x1="15" y1="9" x2="9" y2="15"/><line x1="9" y1="9" x2="15" y2="15"/></svg>
                 )}
-                <span className="font-bold text-base">ادفع (فشل)</span>
+                <span className="font-bold text-base">{t("checkout.payFail")}</span>
               </div>
               <div className="text-[10px] opacity-70">
-                Stripe.test_mode → payment_failed
+                {t("checkout.stripeFailTrace")}
               </div>
             </button>
           </div>
 
           <p className="text-[10px] opacity-40 text-center mt-6">
-            البطاقة لن يتم خصمها — بيئة تطوير محلية
+            {t("checkout.cardHint")}
           </p>
         </div>
       </div>

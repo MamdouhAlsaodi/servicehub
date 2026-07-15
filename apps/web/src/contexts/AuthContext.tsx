@@ -5,7 +5,12 @@ import { apiFetch, User, AuthResponse, VendorStatusResponse } from '@/lib/api';
 
 interface AuthContextType {
   user: User | null;
-  login: (email: string, password: string) => Promise<void>;
+  // Returns the user so the login page can pick a redirect without
+  // re-fetching /me (React state isn't visible to the current closure).
+  login: (email: string, password: string) => Promise<User>;
+  // Portfolio-only simulated Google sign-in. Same lifecycle as login();
+  // calls /api/v1/auth/demo-google-login with the fixed demo identity.
+  demoLogin: () => Promise<User>;
   register: (data: RegisterData) => Promise<void>;
   logout: () => void;
   loading: boolean;
@@ -31,24 +36,46 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
+    // Non-sensitive presence hint set by the server on successful
+    // login/refresh. Pure marker "1" — no token, no user data. When
+    // absent we skip the protected /me call entirely so anonymous
+    // page loads don't log a 401 to the browser console. /me remains
+    // the source of truth for identity; this only gates the request.
+    const hasSessionHint = (): boolean => {
+      if (typeof document === 'undefined') return false;
+      return document.cookie
+        .split(';')
+        .some((c) => c.trim().startsWith('sh_session='));
+    };
+    // Best-effort local clear when /me rejects; the server already
+    // clears the hint on /logout success. Prevents a stale hint from
+    // repeating failed /me calls on the next page load.
+    const clearSessionHint = (): void => {
+      if (typeof document === 'undefined') return;
+      document.cookie = 'sh_session=; Max-Age=0; path=/; SameSite=Lax';
+    };
+
     const initAuth = async () => {
-      const token = localStorage.getItem('access_token');
-      if (token) {
-        try {
-          const userData = await apiFetch<User>('/api/v1/auth/me');
-          setUser(userData);
-          
-          if (userData.role === 'VENDOR') {
-            await refreshVendorStatus();
-          }
-        } catch (error) {
-          localStorage.removeItem('access_token');
-          localStorage.removeItem('refresh_token');
-        }
+      // Session lives in HttpOnly cookies; apiFetch sends them via
+      // credentials: 'include'. No client-side token read possible.
+      if (!hasSessionHint()) {
+        // Anonymous visitor: skip /me so we don't trigger an
+        // expected 401. Middleware still gates protected routes
+        // server-side.
+        setLoading(false);
+        return;
+      }
+      try {
+        const userData = await apiFetch<User>('/api/v1/auth/me');
+        setUser(userData);
+        if (userData.role === 'VENDOR') await refreshVendorStatus();
+      } catch {
+        // Hint was present but /me was rejected (e.g. expired JWT);
+        // drop the hint so we don't loop on the next mount.
+        clearSessionHint();
       }
       setLoading(false);
     };
-    
     initAuth();
   }, []);
 
@@ -61,25 +88,30 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     }
   };
 
-  const login = async (email: string, password: string) => {
+  // Shared session entry for login() and demoLogin() so the demo flow
+  // can't drift from the regular lifecycle. Tokens stay in HttpOnly
+  // cookies set by the server; we only mirror the public user shape.
+  const persistSession = async (response: AuthResponse) => {
+    setUser(response.user);
+    if (response.user.role === 'VENDOR') await refreshVendorStatus();
+  };
+
+  const login = async (email: string, password: string): Promise<User> => {
     const response = await apiFetch<AuthResponse>('/api/v1/auth/login', {
       method: 'POST',
       body: JSON.stringify({ email, password }),
     });
-    
-    localStorage.setItem('access_token', response.accessToken);
-    localStorage.setItem('refresh_token', response.refreshToken);
-    
-    // Set cookie for middleware (15 minutes)
-    if (typeof document !== 'undefined') {
-      document.cookie = `access_token=${response.accessToken}; path=/; max-age=900`;
-    }
-    
-    setUser(response.user);
-    
-    if (response.user.role === 'VENDOR') {
-      await refreshVendorStatus();
-    }
+    await persistSession(response);
+    return response.user;
+  };
+
+  const demoLogin = async (): Promise<User> => {
+    const response = await apiFetch<AuthResponse>('/api/v1/auth/demo-google-login', {
+      method: 'POST',
+      body: JSON.stringify({ email: 'demo.customer@servicehub.local' }),
+    });
+    await persistSession(response);
+    return response.user;
   };
 
   const register = async (data: RegisterData) => {
@@ -89,27 +121,20 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     });
   };
 
+  // Fire-and-forget revocation: server clears HttpOnly cookies and
+  // revokes refresh records; we drop local state immediately. Kept
+  // `() => void` because the dashboard logout button doesn't await.
   const logout = () => {
-    localStorage.removeItem('access_token');
-    localStorage.removeItem('refresh_token');
-    if (typeof document !== 'undefined') {
-      document.cookie = 'access_token=; path=/; max-age=0';
-    }
+    apiFetch('/api/v1/auth/logout', { method: 'POST' }).catch((error) => {
+      console.error('Logout request failed:', error);
+    });
     setUser(null);
     setVendorStatus(null);
   };
 
   return (
     <AuthContext.Provider
-      value={{
-        user,
-        login,
-        register,
-        logout,
-        loading,
-        vendorStatus,
-        refreshVendorStatus,
-      }}
+      value={{ user, login, demoLogin, register, logout, loading, vendorStatus, refreshVendorStatus }}
     >
       {children}
     </AuthContext.Provider>

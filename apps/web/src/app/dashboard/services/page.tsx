@@ -2,16 +2,17 @@
 
 import { useState, useEffect } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
-import { apiFetch } from '@/lib/api';
+import { apiFetch, apiRequest } from '@/lib/api';
+import { usePreferences } from '@/contexts/PreferencesContext';
 
 interface Service {
   id: string;
   title: string;
-  description?: string;
-  price: number;
+  description?: string | null;
+  price: number | string;
   durationMinutes: number;
   categoryId: string;
-  category?: { id: string; nameAr: string; nameEn: string; icon?: string };
+  category?: { id: string; nameAr: string; nameEn: string; icon?: string | null };
   isActive: boolean;
   createdAt: string;
 }
@@ -20,7 +21,12 @@ interface Category {
   id: string;
   nameAr: string;
   nameEn: string;
-  icon?: string;
+  icon?: string | null;
+}
+
+interface ServicesListResponse {
+  data: Service[];
+  meta: { total: number; page: number; limit: number; totalPages: number };
 }
 
 interface ServiceFormData {
@@ -40,45 +46,62 @@ const initialFormData: ServiceFormData = {
 };
 
 export default function ServicesPage() {
+  const { t, locale } = usePreferences();
   const [services, setServices] = useState<Service[]>([]);
   const [categories, setCategories] = useState<Category[]>([]);
   const [loading, setLoading] = useState(true);
+  const [loadError, setLoadError] = useState<string | null>(null);
   const [showModal, setShowModal] = useState(false);
   const [editingService, setEditingService] = useState<Service | null>(null);
   const [formData, setFormData] = useState<ServiceFormData>(initialFormData);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState('');
+  const [vendorId, setVendorId] = useState<string | null>(null);
 
-  useEffect(() => {
-    fetchServices();
-    fetchCategories();
-  }, []);
-
-  const fetchServices = async () => {
-    try {
-      // For now, using localStorage as mock API
-      // In production: const data = await apiFetch('/api/v1/services/my');
-      const stored = localStorage.getItem('vendor_services');
-      setServices(stored ? JSON.parse(stored) : []);
-    } catch (err: any) {
-      console.error('Failed to fetch services:', err);
-    } finally {
-      setLoading(false);
-    }
+  const fetchServices = async (vid: string) => {
+    const list = await apiFetch<ServicesListResponse>(
+      `/api/v1/services?vendorId=${encodeURIComponent(vid)}&limit=100`,
+    );
+    setServices(Array.isArray(list?.data) ? list.data : []);
   };
 
-  const fetchCategories = async () => {
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      try {
+        const me = await apiFetch<{ vendorProfile?: { id?: string } | null }>(
+          '/api/v1/auth/me',
+        );
+        const vid = me?.vendorProfile?.id ?? null;
+        if (!vid) {
+          if (!cancelled) {
+            setLoadError(t('dashboard.services.errorLoadFallback'));
+            setLoading(false);
+          }
+          return;
+        }
+        const cats = await apiFetch<Category[]>('/api/v1/categories');
+        if (cancelled) return;
+        setVendorId(vid);
+        setCategories(Array.isArray(cats) ? cats : []);
+        await fetchServices(vid);
+      } catch (e: any) {
+        if (!cancelled) setLoadError(e?.message || t('dashboard.services.errorLoadServices'));
+      } finally {
+        if (!cancelled) setLoading(false);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [t]);
+
+  const reload = async () => {
+    if (!vendorId) return;
     try {
-      const data = await apiFetch<Category[]>('/api/v1/categories');
-      setCategories(data);
-    } catch (err: any) {
-      console.error('Failed to fetch categories:', err);
-      // Fallback categories
-      setCategories([
-        { id: 'cat-salon', nameAr: 'صالون', nameEn: 'Salon' },
-        { id: 'cat-fitness', nameAr: 'لياقة', nameEn: 'Fitness' },
-        { id: 'cat-spa', nameAr: 'سبا', nameEn: 'Spa' },
-      ]);
+      await fetchServices(vendorId);
+    } catch (e) {
+      console.error('Failed to reload services:', e);
     }
   };
 
@@ -88,40 +111,32 @@ export default function ServicesPage() {
     setSaving(true);
 
     try {
-      const serviceData = {
-        ...formData,
+      const payload = {
+        title: formData.title,
+        description: formData.description || undefined,
         price: parseFloat(formData.price),
         durationMinutes: parseInt(formData.durationMinutes),
+        categoryId: formData.categoryId,
       };
 
       if (editingService) {
-        // Update existing
-        const updated = services.map(s => 
-          s.id === editingService.id 
-            ? { ...s, ...serviceData, category: categories.find(c => c.id === serviceData.categoryId) }
-            : s
-        );
-        setServices(updated);
-        localStorage.setItem('vendor_services', JSON.stringify(updated));
+        await apiFetch(`/api/v1/services/${editingService.id}`, {
+          method: 'PATCH',
+          body: JSON.stringify(payload),
+        });
       } else {
-        // Create new
-        const newService: Service = {
-          id: `svc-${Date.now()}`,
-          ...serviceData,
-          isActive: true,
-          createdAt: new Date().toISOString(),
-          category: categories.find(c => c.id === serviceData.categoryId),
-        };
-        const updated = [newService, ...services];
-        setServices(updated);
-        localStorage.setItem('vendor_services', JSON.stringify(updated));
+        await apiFetch('/api/v1/services', {
+          method: 'POST',
+          body: JSON.stringify(payload),
+        });
       }
 
+      await reload();
       setShowModal(false);
       setEditingService(null);
       setFormData(initialFormData);
     } catch (err: any) {
-      setError(err.message || 'حدث خطأ أثناء الحفظ');
+      setError(err?.message || t('dashboard.services.errorSave'));
     } finally {
       setSaving(false);
     }
@@ -140,13 +155,16 @@ export default function ServicesPage() {
   };
 
   const handleDelete = async (serviceId: string) => {
-    if (!confirm('هل أنت متأكد من حذف هذه الخدمة؟')) return;
-    
-    const updated = services.map(s => 
-      s.id === serviceId ? { ...s, isActive: false } : s
-    ).filter(s => s.isActive);
-    setServices(updated);
-    localStorage.setItem('vendor_services', JSON.stringify(updated));
+    if (!confirm(t('dashboard.services.deleteConfirm'))) return;
+
+    try {
+      await apiRequest(`/api/v1/services/${serviceId}`, {
+        method: 'DELETE',
+      });
+      await reload();
+    } catch (e: any) {
+      alert(e?.message || t('dashboard.services.deleteErrorFallback'));
+    }
   };
 
   const openAddModal = () => {
@@ -158,8 +176,26 @@ export default function ServicesPage() {
 
   if (loading) {
     return (
-      <div className="flex items-center justify-center h-64">
+      <div
+        className="flex flex-col items-center justify-center h-64 gap-3"
+        role="status"
+        aria-live="polite"
+      >
         <div className="w-8 h-8 border-4 border-[var(--border)] border-t-[var(--accent)] rounded-full animate-spin" />
+        <p className="text-sm" style={{ color: 'var(--text-muted)' }}>
+          {t('dashboard.services.loadingServices')}
+        </p>
+      </div>
+    );
+  }
+
+  if (loadError) {
+    return (
+      <div className="glass rounded-2xl p-8 text-center" role="alert">
+        <p className="text-base font-semibold mb-1" style={{ color: 'var(--text)' }}>
+          {t('dashboard.services.errorLoadServices')}
+        </p>
+        <p className="text-sm" style={{ color: 'var(--text-muted)' }}>{loadError}</p>
       </div>
     );
   }
@@ -170,10 +206,10 @@ export default function ServicesPage() {
       <div className="flex items-center justify-between">
         <div>
           <h1 className="text-3xl font-display font-bold" style={{ color: 'var(--text)' }}>
-            خدماتي
+            {t('dashboard.services.title')}
           </h1>
           <p className="text-sm mt-1" style={{ color: 'var(--text-muted)' }}>
-            إدارة وعرض الخدمات التي تقدمها
+            {t('dashboard.services.subtitle')}
           </p>
         </div>
         <button
@@ -184,7 +220,7 @@ export default function ServicesPage() {
           <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
             <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 4v16m8-8H4" />
           </svg>
-          إضافة خدمة
+          {t('dashboard.services.addCta')}
         </button>
       </div>
 
@@ -195,10 +231,10 @@ export default function ServicesPage() {
             <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M19 11H5m14 0a2 2 0 012 2v6a2 2 0 01-2 2H5a2 2 0 01-2-2v-6a2 2 0 012-2m14 0V9a2 2 0 00-2-2M5 11V9a2 2 0 012-2m0 0V5a2 2 0 012-2h6a2 2 0 012 2v2M7 7h10" />
           </svg>
           <h3 className="text-lg font-semibold mb-2" style={{ color: 'var(--text)' }}>
-            لا توجد خدمات
+            {t('dashboard.services.emptyTitle')}
           </h3>
           <p className="text-sm mb-6" style={{ color: 'var(--text-muted)' }}>
-            ابدأ بإضافة خدماتك الأولى لجذب العملاء
+            {t('dashboard.services.emptySubtitle')}
           </p>
           <button
             onClick={openAddModal}
@@ -208,7 +244,7 @@ export default function ServicesPage() {
             <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
               <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 4v16m8-8H4" />
             </svg>
-            إضافة الخدمة الأولى
+            {t('dashboard.services.addFirstCta')}
           </button>
         </div>
       ) : (
@@ -216,23 +252,23 @@ export default function ServicesPage() {
           <table className="w-full">
             <thead>
               <tr className="border-b border-[var(--border)]" style={{ background: 'var(--surface-hi)' }}>
-                <th className="text-right text-sm font-medium px-6 py-4" style={{ color: 'var(--text-muted)' }}>
-                  الخدمة
+                <th className="text-start text-sm font-medium px-6 py-4" style={{ color: 'var(--text-muted)' }}>
+                  {t('dashboard.services.table.service')}
                 </th>
-                <th className="text-right text-sm font-medium px-6 py-4" style={{ color: 'var(--text-muted)' }}>
-                  الفئة
+                <th className="text-start text-sm font-medium px-6 py-4" style={{ color: 'var(--text-muted)' }}>
+                  {t('dashboard.services.table.category')}
                 </th>
-                <th className="text-right text-sm font-medium px-6 py-4" style={{ color: 'var(--text-muted)' }}>
-                  المدة
+                <th className="text-start text-sm font-medium px-6 py-4" style={{ color: 'var(--text-muted)' }}>
+                  {t('dashboard.services.table.duration')}
                 </th>
-                <th className="text-right text-sm font-medium px-6 py-4" style={{ color: 'var(--text-muted)' }}>
-                  السعر
+                <th className="text-start text-sm font-medium px-6 py-4" style={{ color: 'var(--text-muted)' }}>
+                  {t('dashboard.services.table.price')}
                 </th>
-                <th className="text-right text-sm font-medium px-6 py-4" style={{ color: 'var(--text-muted)' }}>
-                  الحالة
+                <th className="text-start text-sm font-medium px-6 py-4" style={{ color: 'var(--text-muted)' }}>
+                  {t('dashboard.services.table.status')}
                 </th>
-                <th className="text-right text-sm font-medium px-6 py-4" style={{ color: 'var(--text-muted)' }}>
-                  إجراءات
+                <th className="text-start text-sm font-medium px-6 py-4" style={{ color: 'var(--text-muted)' }}>
+                  {t('dashboard.services.table.actions')}
                 </th>
               </tr>
             </thead>
@@ -258,33 +294,35 @@ export default function ServicesPage() {
                     </div>
                   </td>
                   <td className="px-6 py-4">
-                    <span 
+                    <span
                       className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-xs font-medium"
                       style={{ background: 'var(--surface-hi)', color: 'var(--text-muted)' }}
                     >
                       {service.category?.icon && <span>{service.category.icon}</span>}
-                      {service.category?.nameAr || 'غير محدد'}
+                      {service.category
+                        ? (locale === 'ar' ? service.category.nameAr : service.category.nameEn)
+                        : t('dashboard.services.categoryFallback')}
                     </span>
                   </td>
                   <td className="px-6 py-4">
                     <span className="font-mono text-sm" style={{ color: 'var(--text-muted)' }}>
-                      {service.durationMinutes} دقيقة
+                      {t('dashboard.services.durationMinutes', { n: service.durationMinutes })}
                     </span>
                   </td>
                   <td className="px-6 py-4">
                     <span className="font-mono font-medium" style={{ color: 'var(--accent)' }}>
-                      ر.س {service.price}
+                      {t('dashboard.layout.currencySar')}{service.price}
                     </span>
                   </td>
                   <td className="px-6 py-4">
-                    <span 
+                    <span
                       className="inline-flex items-center px-3 py-1 rounded-full text-xs font-medium"
-                      style={{ 
+                      style={{
                         background: service.isActive ? 'rgba(34, 197, 94, 0.15)' : 'rgba(239, 68, 68, 0.15)',
                         color: service.isActive ? '#22c55e' : '#ef4444'
                       }}
                     >
-                      {service.isActive ? 'نشط' : 'غير نشط'}
+                      {service.isActive ? t('dashboard.services.status.active') : t('dashboard.services.status.inactive')}
                     </span>
                   </td>
                   <td className="px-6 py-4">
@@ -333,13 +371,13 @@ export default function ServicesPage() {
               exit={{ opacity: 0, scale: 0.95, y: 20 }}
               className="fixed inset-0 z-50 flex items-center justify-center p-4 pointer-events-none"
             >
-              <div 
+              <div
                 className="w-full max-w-lg rounded-2xl p-6 pointer-events-auto"
                 style={{ background: 'var(--surface)' }}
               >
                 <div className="flex items-center justify-between mb-6">
                   <h2 className="text-xl font-display font-bold" style={{ color: 'var(--text)' }}>
-                    {editingService ? 'تعديل الخدمة' : 'إضافة خدمة جديدة'}
+                    {editingService ? t('dashboard.services.modal.editTitle') : t('dashboard.services.modal.addTitle')}
                   </h2>
                   <button
                     onClick={() => setShowModal(false)}
@@ -361,7 +399,7 @@ export default function ServicesPage() {
                 <form onSubmit={handleSubmit} className="space-y-4">
                   <div>
                     <label className="block text-sm font-medium mb-1.5" style={{ color: 'var(--text-muted)' }}>
-                      اسم الخدمة *
+                      {t('dashboard.services.field.title')}
                     </label>
                     <input
                       type="text"
@@ -369,37 +407,37 @@ export default function ServicesPage() {
                       value={formData.title}
                       onChange={(e) => setFormData({ ...formData, title: e.target.value })}
                       className="w-full px-4 py-2.5 rounded-xl outline-none transition-colors"
-                      style={{ 
-                        background: 'var(--surface-hi)', 
+                      style={{
+                        background: 'var(--surface-hi)',
                         border: '1px solid var(--border)',
                         color: 'var(--text)'
                       }}
-                      placeholder="مثال: قص شعر رجالي"
+                      placeholder={t('dashboard.services.field.titlePlaceholder')}
                     />
                   </div>
 
                   <div>
                     <label className="block text-sm font-medium mb-1.5" style={{ color: 'var(--text-muted)' }}>
-                      الوصف
+                      {t('dashboard.services.field.description')}
                     </label>
                     <textarea
                       value={formData.description}
                       onChange={(e) => setFormData({ ...formData, description: e.target.value })}
                       rows={3}
                       className="w-full px-4 py-2.5 rounded-xl outline-none transition-colors resize-none"
-                      style={{ 
-                        background: 'var(--surface-hi)', 
+                      style={{
+                        background: 'var(--surface-hi)',
                         border: '1px solid var(--border)',
                         color: 'var(--text)'
                       }}
-                      placeholder="وصف مختصر للخدمة..."
+                      placeholder={t('dashboard.services.field.descriptionPlaceholder')}
                     />
                   </div>
 
                   <div className="grid grid-cols-2 gap-4">
                     <div>
                       <label className="block text-sm font-medium mb-1.5" style={{ color: 'var(--text-muted)' }}>
-                        السعر (ر.س) *
+                        {t('dashboard.services.field.price')}
                       </label>
                       <input
                         type="number"
@@ -409,8 +447,8 @@ export default function ServicesPage() {
                         value={formData.price}
                         onChange={(e) => setFormData({ ...formData, price: e.target.value })}
                         className="w-full px-4 py-2.5 rounded-xl outline-none transition-colors font-mono"
-                        style={{ 
-                          background: 'var(--surface-hi)', 
+                        style={{
+                          background: 'var(--surface-hi)',
                           border: '1px solid var(--border)',
                           color: 'var(--text)'
                         }}
@@ -419,7 +457,7 @@ export default function ServicesPage() {
                     </div>
                     <div>
                       <label className="block text-sm font-medium mb-1.5" style={{ color: 'var(--text-muted)' }}>
-                        المدة (دقيقة) *
+                        {t('dashboard.services.field.duration')}
                       </label>
                       <input
                         type="number"
@@ -428,8 +466,8 @@ export default function ServicesPage() {
                         value={formData.durationMinutes}
                         onChange={(e) => setFormData({ ...formData, durationMinutes: e.target.value })}
                         className="w-full px-4 py-2.5 rounded-xl outline-none transition-colors font-mono"
-                        style={{ 
-                          background: 'var(--surface-hi)', 
+                        style={{
+                          background: 'var(--surface-hi)',
                           border: '1px solid var(--border)',
                           color: 'var(--text)'
                         }}
@@ -440,23 +478,23 @@ export default function ServicesPage() {
 
                   <div>
                     <label className="block text-sm font-medium mb-1.5" style={{ color: 'var(--text-muted)' }}>
-                      الفئة *
+                      {t('dashboard.services.field.category')}
                     </label>
                     <select
                       required
                       value={formData.categoryId}
                       onChange={(e) => setFormData({ ...formData, categoryId: e.target.value })}
                       className="w-full px-4 py-2.5 rounded-xl outline-none transition-colors"
-                      style={{ 
-                        background: 'var(--surface-hi)', 
+                      style={{
+                        background: 'var(--surface-hi)',
                         border: '1px solid var(--border)',
                         color: 'var(--text)'
                       }}
                     >
-                      <option value="">اختر الفئة</option>
+                      <option value="">{t('dashboard.services.field.categoryPlaceholder')}</option>
                       {categories.map((cat) => (
                         <option key={cat.id} value={cat.id}>
-                          {cat.icon && `${cat.icon} `}{cat.nameAr}
+                          {cat.icon && `${cat.icon} `}{locale === 'ar' ? cat.nameAr : cat.nameEn}
                         </option>
                       ))}
                     </select>
@@ -467,12 +505,12 @@ export default function ServicesPage() {
                       type="button"
                       onClick={() => setShowModal(false)}
                       className="flex-1 px-4 py-2.5 rounded-xl font-medium transition-colors"
-                      style={{ 
-                        background: 'var(--surface-hi)', 
+                      style={{
+                        background: 'var(--surface-hi)',
                         color: 'var(--text-muted)'
                       }}
                     >
-                      إلغاء
+                      {t('dashboard.services.cancel')}
                     </button>
                     <button
                       type="submit"
@@ -480,7 +518,7 @@ export default function ServicesPage() {
                       className="flex-1 px-4 py-2.5 rounded-xl font-medium transition-all disabled:opacity-50"
                       style={{ background: 'var(--accent)', color: 'white' }}
                     >
-                      {saving ? 'جاري الحفظ...' : (editingService ? 'حفظ التغييرات' : 'إضافة الخدمة')}
+                      {saving ? t('dashboard.services.saving') : (editingService ? t('dashboard.services.editSubmit') : t('dashboard.services.addSubmit'))}
                     </button>
                   </div>
                 </form>

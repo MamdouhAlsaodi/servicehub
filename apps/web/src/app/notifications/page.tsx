@@ -13,6 +13,9 @@
 import { useEffect, useState, useCallback } from "react";
 import { useRouter } from "next/navigation";
 import Link from "next/link";
+import { apiRequest } from "@/lib/api";
+import { usePreferences, type Translator } from "@/contexts/PreferencesContext";
+import type { MessageKey } from "@/i18n/messages";
 interface Notification {
   id: string;
   type: string;
@@ -28,32 +31,36 @@ interface ListResponse {
 
 const TYPE_META: Record<
   string,
-  { label: string; color: string; icon: any }
+  { labelKey: MessageKey; color: string; icon: any }
 > = {
-  BOOKING_CONFIRMED: { label: "تم تأكيد الحجز", color: "#34D399", icon: 'check' },
-  BOOKING_CANCELLED: { label: "تم إلغاء الحجز", color: "#EF4444", icon: 'x' },
-  BOOKING_CREATED: { label: "حجز جديد", color: "#38BDF8", icon: 'bell' },
-  PAYMENT_RECEIVED: { label: "تم استلام الدفع", color: "#34D399", icon: 'check' },
-  PAYMENT_FAILED: { label: "فشل الدفع", color: "#EF4444", icon: 'alert' },
-  REVIEW_RECEIVED: { label: "تقييم جديد", color: "#C9A84C", icon: 'check' },
+  BOOKING_CONFIRMED: { labelKey: "notifications.typeBookingConfirmed", color: "#34D399", icon: 'check' },
+  BOOKING_CANCELLED: { labelKey: "notifications.typeBookingCancelled", color: "#EF4444", icon: 'x' },
+  BOOKING_CREATED: { labelKey: "notifications.typeBookingCreated", color: "#38BDF8", icon: 'bell' },
+  PAYMENT_RECEIVED: { labelKey: "notifications.typePaymentReceived", color: "#34D399", icon: 'check' },
+  PAYMENT_FAILED: { labelKey: "notifications.typePaymentFailed", color: "#EF4444", icon: 'alert' },
+  REVIEW_RECEIVED: { labelKey: "notifications.typeReviewReceived", color: "#C9A84C", icon: 'check' },
 };
 
 const POLL_MS = 30_000;
 
-function relativeTime(iso: string): string {
-  const d = new Date(iso);
-  const ms = Date.now() - d.getTime();
-  if (ms < 60_000) return "الآن";
-  const mins = Math.floor(ms / 60_000);
-  if (mins < 60) return `منذ ${mins} دقيقة`;
-  const hrs = Math.floor(mins / 60);
-  if (hrs < 24) return `منذ ${hrs} ساعة`;
-  const days = Math.floor(hrs / 24);
-  return `منذ ${days} يوم`;
+function buildRelativeTime(t: Translator) {
+  return function relativeTime(iso: string): string {
+    const d = new Date(iso);
+    const ms = Date.now() - d.getTime();
+    if (ms < 60_000) return t("notifications.relativeNow");
+    const mins = Math.floor(ms / 60_000);
+    if (mins < 60) return t("notifications.relativeMinutes", { n: mins });
+    const hrs = Math.floor(mins / 60);
+    if (hrs < 24) return t("notifications.relativeHours", { n: hrs });
+    const days = Math.floor(hrs / 24);
+    return t("notifications.relativeDays", { n: days });
+  };
 }
 
 export default function NotificationsPage() {
   const router = useRouter();
+  const { t } = usePreferences();
+  const relativeTime = buildRelativeTime(t);
   const [data, setData] = useState<ListResponse | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -72,11 +79,11 @@ export default function NotificationsPage() {
       const json: ListResponse = await res.json();
       setData(json);
     } catch (e: any) {
-      setError(e.message || "تعذر التحميل");
+      setError(e.message || t("home.loadError"));
     } finally {
       setLoading(false);
     }
-  }, [router]);
+  }, [router, t]);
 
   useEffect(() => {
     fetchData();
@@ -86,10 +93,9 @@ export default function NotificationsPage() {
 
   async function markRead(id: string) {
     try {
-      const res = await fetch(
-        `${process.env.NEXT_PUBLIC_API_URL}/notifications/${id}/read`,
-        { method: "POST", credentials: "include" },
-      );
+      const res = await apiRequest(`/api/v1/notifications/${id}/read`, {
+        method: "POST",
+      });
       if (res.ok) {
         setData((prev) =>
           prev
@@ -108,10 +114,9 @@ export default function NotificationsPage() {
 
   async function markAll() {
     try {
-      const res = await fetch(
-        `${process.env.NEXT_PUBLIC_API_URL}/notifications/read-all`,
-        { method: "POST", credentials: "include" },
-      );
+      const res = await apiRequest("/api/v1/notifications/read-all", {
+        method: "POST",
+      });
       if (res.ok) {
         const now = new Date().toISOString();
         setData((prev) =>
@@ -138,7 +143,7 @@ export default function NotificationsPage() {
         <div className="max-w-3xl mx-auto px-6 py-4 flex items-center justify-between">
           <div className="flex items-center gap-3">
             <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="var(--accent)" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M6 8a6 6 0 0 1 12 0c0 7 3 9 3 9H3s3-2 3-9"/><path d="M10.3 21a1.94 1.94 0 0 0 3.4 0"/></svg>
-            <h1 className="text-base font-bold">الإشعارات</h1>
+            <h1 className="text-base font-bold">{t("notifications.title")}</h1>
             {data && data.unread > 0 && (
               <span
                 className="px-2 py-0.5 rounded-full text-[10px] font-bold"
@@ -147,7 +152,7 @@ export default function NotificationsPage() {
                   color: "var(--bg)",
                 }}
               >
-                {data.unread} جديد
+                {t("notifications.newBadge", { n: data.unread })}
               </span>
             )}
           </div>
@@ -156,7 +161,7 @@ export default function NotificationsPage() {
               onClick={markAll}
               className="text-xs opacity-60 hover:opacity-100 inline-flex items-center gap-1"
             >
-              <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><polyline points="20 6 9 17 4 12"/></svg> تعيين الكل كمقروء
+              <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><polyline points="20 6 9 17 4 12"/></svg> {t("notifications.markAll")}
             </button>
           )}
         </div>
@@ -187,19 +192,16 @@ export default function NotificationsPage() {
             }}
           >
             <svg width="36" height="36" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="opacity-30"><path d="M6 8a6 6 0 0 1 12 0c0 7 3 9 3 9H3s3-2 3-9"/><path d="M10.3 21a1.94 1.94 0 0 0 3.4 0"/></svg>
-            <h3 className="text-base font-bold mb-1">لا توجد إشعارات</h3>
+            <h3 className="text-base font-bold mb-1">{t("notifications.emptyTitle")}</h3>
             <p className="text-xs opacity-60">
-              سنخبرك هنا عند أي تحديث على حجوزاتك
+              {t("notifications.emptySubtitle")}
             </p>
           </div>
         ) : (
           <div className="space-y-2">
             {data.items.map((n) => {
-              const meta = TYPE_META[n.type] ?? {
-                label: n.type,
-                color: "#9B98A5",
-                icon: 'bell',
-              };
+              const meta = TYPE_META[n.type];
+              const color = meta?.color ?? "#9B98A5";
               const unread = !n.readAt;
               return (
                 <div
@@ -207,15 +209,15 @@ export default function NotificationsPage() {
                   className="rounded-2xl p-4 flex items-start gap-3 transition-all"
                   style={{
                     background: unread ? "var(--surface)" : "var(--surface)",
-                    border: `1px solid ${unread ? meta.color + "55" : "var(--border)"}`,
+                    border: `1px solid ${unread ? color + "55" : "var(--border)"}`,
                     opacity: unread ? 1 : 0.65,
                   }}
                 >
                   <div
                     className="shrink-0 w-9 h-9 rounded-xl flex items-center justify-center"
                     style={{
-                      background: `${meta.color}22`,
-                      border: `1px solid ${meta.color}55`,
+                      background: `${color}22`,
+                      border: `1px solid ${color}55`,
                     }}
                   >
                     <svg
@@ -223,7 +225,7 @@ export default function NotificationsPage() {
                       height="16"
                       viewBox="0 0 24 24"
                       fill="none"
-                      stroke={meta.color}
+                      stroke={color}
                       strokeWidth="2"
                       strokeLinecap="round"
                       strokeLinejoin="round"
@@ -249,9 +251,9 @@ export default function NotificationsPage() {
                     <div className="flex items-center justify-between gap-2 mb-1">
                       <span
                         className="text-sm font-bold"
-                        style={{ color: meta.color }}
+                        style={{ color }}
                       >
-                        {meta.label}
+                        {meta ? t(meta.labelKey) : n.type}
                       </span>
                       <span className="text-[10px] opacity-50 shrink-0">
                         {relativeTime(n.createdAt)}
@@ -262,7 +264,7 @@ export default function NotificationsPage() {
                     <div className="text-xs opacity-60 space-y-0.5">
                       {typeof n.payload.bookingId === "string" && (
                         <p>
-                          حجز:{" "}
+                          {t("notifications.payloadBooking")}{" "}
                           <code className="text-[10px] opacity-70 font-mono">
                             {(n.payload.bookingId as string).slice(0, 12)}…
                           </code>
@@ -270,7 +272,7 @@ export default function NotificationsPage() {
                       )}
                       {typeof n.payload.amount === "number" && (
                         <p>
-                          المبلغ:{" "}
+                          {t("notifications.payloadAmount")}{" "}
                           <span
                             className="font-bold"
                             style={{ fontFamily: "JetBrains Mono, monospace" }}
@@ -287,7 +289,7 @@ export default function NotificationsPage() {
                         onClick={() => markRead(n.id)}
                         className="text-[10px] opacity-60 hover:opacity-100 mt-2 inline-flex items-center gap-1"
                       >
-                        <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><polyline points="20 6 9 17 4 12"/></svg> تعيين كمقروء
+                        <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><polyline points="20 6 9 17 4 12"/></svg> {t("notifications.markRead")}
                       </button>
                     )}
                   </div>

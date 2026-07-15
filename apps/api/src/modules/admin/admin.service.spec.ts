@@ -2,6 +2,7 @@
  * Phase 7 — Admin Service tests.
  *
  * Covers:
+ *   - commission settings default, validation, and persistence
  *   - listPendingVendors filters by status
  *   - approveVendor transitions PENDING → APPROVED
  *   - suspendVendor transitions APPROVED → SUSPENDED
@@ -11,10 +12,12 @@
  */
 import { Test, TestingModule } from '@nestjs/testing';
 import {
+  BadRequestException,
   ConflictException,
   NotFoundException,
 } from '@nestjs/common';
 import { AdminService } from './admin.service';
+import { UpdateCommissionSettingsDto } from './dto/update-commission-settings.dto';
 import { PrismaService } from '../../shared/modules/prisma/prisma.service';
 import { prisma, cleanDatabase, disconnectPrisma } from '../../test/setup';
 import {
@@ -24,6 +27,7 @@ import {
   VendorStatus,
 } from '@prisma/client';
 import * as bcrypt from 'bcrypt';
+import { validate } from 'class-validator';
 
 describe('AdminService', () => {
   let service: AdminService;
@@ -88,6 +92,7 @@ describe('AdminService', () => {
 
   beforeEach(async () => {
     await cleanDatabase();
+    await prisma.platformSettings.deleteMany();
     const module: TestingModule = await Test.createTestingModule({
       providers: [AdminService, { provide: PrismaService, useValue: prisma }],
     }).compile();
@@ -104,6 +109,63 @@ describe('AdminService', () => {
 
   afterAll(async () => {
     await disconnectPrisma();
+  });
+
+  /* ═══════════════════════════════════════════
+     PLATFORM SETTINGS
+     ═══════════════════════════════════════════ */
+
+  describe('commission settings', () => {
+    it('(B5 TEST 1) creates and returns the durable 10% default as a percent', async () => {
+      const settings = await service.getPlatformSettings();
+
+      expect(settings).toEqual({
+        commissionRatePercent: 10,
+        updatedAt: expect.any(Date),
+      });
+      expect(settings).not.toHaveProperty('commissionRate');
+
+      const persisted = await prisma.platformSettings.findUniqueOrThrow({
+        where: { id: 1 },
+      });
+      expect(persisted.commissionRate.toFixed(6)).toBe('0.100000');
+    });
+
+    it('(B5 TEST 2) persists 0%, 12.5%, and 100% exactly', async () => {
+      const cases = [
+        { percent: 0, fraction: '0.000000' },
+        { percent: 12.5, fraction: '0.125000' },
+        { percent: 100, fraction: '1.000000' },
+      ];
+
+      for (const { percent, fraction } of cases) {
+        const updated = await service.updateCommissionRate(percent);
+        expect(updated.commissionRatePercent).toBe(percent);
+        expect(updated).not.toHaveProperty('commissionRate');
+
+        const persisted = await prisma.platformSettings.findUniqueOrThrow({
+          where: { id: 1 },
+        });
+        expect(persisted.commissionRate.toFixed(6)).toBe(fraction);
+        expect((await service.getPlatformSettings()).commissionRatePercent).toBe(
+          percent,
+        );
+      }
+    });
+
+    it('(B5 TEST 3) rejects invalid DTO values and service bypasses', async () => {
+      const invalidInputs: unknown[] = [-0.0001, 100.0001, 12.34567, '12.5', Number.NaN];
+
+      for (const value of invalidInputs) {
+        const dto = Object.assign(new UpdateCommissionSettingsDto(), {
+          commissionRatePercent: value,
+        });
+        expect(await validate(dto)).not.toHaveLength(0);
+        await expect(
+          service.updateCommissionRate(value as number),
+        ).rejects.toThrow(BadRequestException);
+      }
+    });
   });
 
   /* ═══════════════════════════════════════════

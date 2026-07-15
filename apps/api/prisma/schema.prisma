@@ -40,6 +40,14 @@ enum PaymentProvider {
   MOCK
 }
 
+/// Singleton platform configuration. The database migration constrains
+/// the sole row to id=1 so commission changes have one authoritative source.
+model PlatformSettings {
+  id             Int      @id @default(1)
+  commissionRate Decimal  @default(0.10) @db.Decimal(7, 6)
+  updatedAt      DateTime @default(now()) @updatedAt
+}
+
 model User {
   id                  String    @id @default(cuid())
   name                String
@@ -263,6 +271,13 @@ model Notification {
   payload   Json
   readAt    DateTime?
   createdAt DateTime  @default(now())
+  /// Stable key used to atomically dedupe in-app notifications at the
+  /// database level. Populated by the reminders service with values
+  /// like `booking:<bookingId>:reminder:<24h|1h>`. Nullable so
+  /// non-reminder notifications (booking confirmed, payment received,
+  /// etc.) continue to write rows without a key. Postgres UNIQUE
+  /// indexes treat NULL as distinct, so existing rows are unaffected.
+  dedupeKey String?   @unique
 
   user User @relation(fields: [userId], references: [id], onDelete: Cascade)
 

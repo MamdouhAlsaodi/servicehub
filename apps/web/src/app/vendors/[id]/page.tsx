@@ -13,6 +13,8 @@
 import { useEffect, useState, useCallback, use } from "react";
 import { useRouter } from "next/navigation";
 import Link from "next/link";
+import { apiRequest } from "@/lib/api";
+import { usePreferences } from "@/contexts/PreferencesContext";
 interface VendorDetail {
   id: string;
   businessName: string;
@@ -51,6 +53,7 @@ export default function VendorDetailPage({
 }) {
   const { id } = params;
   const router = useRouter();
+  const { t } = usePreferences();
 
   const [vendor, setVendor] = useState<VendorDetail | null>(null);
   const [reviews, setReviews] = useState<Review[]>([]);
@@ -59,27 +62,28 @@ export default function VendorDetailPage({
 
   const fetchVendor = useCallback(async () => {
     try {
-      const res = await fetch(
-        `${process.env.NEXT_PUBLIC_API_URL}/vendors/${id}`,
-      );
+      const res = await apiRequest(`/api/v1/vendors/${id}`);
       if (res.status === 404) {
-        setError("البائع غير موجود");
+        setError(t("vendor.errorNotFound"));
         setLoading(false);
         return;
       }
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
       const data: VendorDetail = await res.json();
       setVendor(data);
-      /* Reviews come from a separate endpoint. */
-      const rev = await fetch(
-        `${process.env.NEXT_PUBLIC_API_URL}/reviews/vendor/${id}?limit=5`,
-      );
-      if (rev.ok) {
-        const j = await rev.json();
-        setReviews(j.reviews ?? []);
+      /* Reviews come from a separate endpoint; a failure here must
+         never hide an already-loaded valid vendor. */
+      try {
+        const rev = await apiRequest(`/api/v1/reviews/vendor/${id}?limit=5`);
+        if (rev.ok) {
+          const j = await rev.json();
+          setReviews(j.reviews ?? []);
+        }
+      } catch {
+        /* swallow review fetch failure */
       }
     } catch (e: any) {
-      setError(e.message || "تعذر التحميل");
+      setError(e.message || t("home.loadError"));
     } finally {
       setLoading(false);
     }
@@ -102,9 +106,9 @@ export default function VendorDetailPage({
       <main className="min-h-screen flex items-center justify-center px-6" style={{ background: "var(--bg)" }}>
         <div className="text-center">
           <svg width="28" height="28" viewBox="0 0 24 24" fill="none" style={{ color: "#FB7185" }} strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12.01" y2="16"/></svg>
-          <p className="text-sm opacity-80">{error || "غير موجود"}</p>
+          <p className="text-sm opacity-80">{error || t("vendor.errorMissing")}</p>
           <Link href="/" className="text-xs opacity-60 hover:opacity-100 mt-4 inline-block">
-            العودة للرئيسية
+            {t("vendor.backToHome")}
           </Link>
         </div>
       </main>
@@ -126,9 +130,9 @@ export default function VendorDetailPage({
               <line x1="5" y1="12" x2="19" y2="12" />
               <polyline points="12 5 19 12 12 19" />
             </svg>
-            الرئيسية
+            {t("nav.home")}
           </Link>
-          <span className="text-xs opacity-60">تفاصيل البائع</span>
+          <span className="text-xs opacity-60">{t("vendor.headerTitle")}</span>
           <div className="w-12" />
         </div>
       </header>
@@ -202,7 +206,7 @@ export default function VendorDetailPage({
         {/* Services */}
         <section>
           <h2 className="text-xs uppercase tracking-widest opacity-50 font-bold mb-3">
-            الخدمات ({vendor.services.length})
+            {t("vendor.servicesTitle", { count: vendor.services.length })}
           </h2>
           {vendor.services.length === 0 ? (
             <div
@@ -212,15 +216,14 @@ export default function VendorDetailPage({
                 border: "1px solid var(--border)",
               }}
             >
-              <p className="text-sm opacity-60">لا توجد خدمات نشطة حاليًا</p>
+              <p className="text-sm opacity-60">{t("vendor.servicesEmpty")}</p>
             </div>
           ) : (
             <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
               {vendor.services.map((s) => (
-                <Link
+                <article
                   key={s.id}
-                  href={`/book/${s.id}`}
-                  className="rounded-2xl p-4 transition-all hover:scale-[1.01]"
+                  className="rounded-2xl p-4 flex flex-col"
                   style={{
                     background: "var(--surface)",
                     border: "1px solid var(--border)",
@@ -245,23 +248,29 @@ export default function VendorDetailPage({
                       {s.description}
                     </p>
                   )}
-                  <div className="flex items-center justify-between text-[10px] opacity-60">
-                    <span className="inline-flex items-center gap-1">
-                      <svg width="9" height="9" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                        <circle cx="12" cy="12" r="10" />
-                        <polyline points="12 6 12 12 16 14" />
-                      </svg>
-                      {s.durationMinutes} دقيقة
-                    </span>
-                    <span className="inline-flex items-center gap-1" style={{ color: "var(--accent)" }}>
-                      احجز
-                      <svg width="9" height="9" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="rotate-180">
-                        <line x1="5" y1="12" x2="19" y2="12" />
-                        <polyline points="12 5 19 12 12 19" />
-                      </svg>
-                    </span>
+                  <div className="text-[10px] opacity-60 mb-3 inline-flex items-center gap-1">
+                    <svg width="9" height="9" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                      <circle cx="12" cy="12" r="10" />
+                      <polyline points="12 6 12 12 16 14" />
+                    </svg>
+                    {s.durationMinutes} {t("vendor.minutes")}
                   </div>
-                </Link>
+                  <Link
+                    href={`/book/${s.id}`}
+                    aria-label={t("vendor.bookAria", { title: s.title })}
+                    className="mt-auto inline-flex items-center justify-center gap-2 min-h-[44px] px-4 rounded-xl text-sm font-bold transition-opacity hover:opacity-90 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-offset-2 focus-visible:ring-offset-[var(--surface)] focus-visible:ring-[var(--text)]"
+                    style={{
+                      background: "var(--accent)",
+                      color: "var(--bg)",
+                    }}
+                  >
+                    <span>{t("vendor.bookCta")}</span>
+                    <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" className="rotate-180" aria-hidden="true">
+                      <line x1="5" y1="12" x2="19" y2="12" />
+                      <polyline points="12 5 19 12 12 19" />
+                    </svg>
+                  </Link>
+                </article>
               ))}
             </div>
           )}
@@ -270,7 +279,7 @@ export default function VendorDetailPage({
         {/* Reviews */}
         <section>
           <h2 className="text-xs uppercase tracking-widest opacity-50 font-bold mb-3">
-            آخر التقييمات ({reviews.length})
+            {t("vendor.reviewsTitle", { count: reviews.length })}
           </h2>
           {reviews.length === 0 ? (
             <div
@@ -280,7 +289,7 @@ export default function VendorDetailPage({
                 border: "1px solid var(--border)",
               }}
             >
-              <p className="text-sm opacity-60">لا توجد تقييمات بعد</p>
+              <p className="text-sm opacity-60">{t("vendor.reviewsEmpty")}</p>
             </div>
           ) : (
             <div className="space-y-2">

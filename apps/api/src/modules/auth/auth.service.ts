@@ -12,6 +12,9 @@ import { RegisterDto } from './dto/register.dto';
 import { LoginDto } from './dto/login.dto';
 import { RequestResetDto } from './dto/request-reset.dto';
 import { ResetPasswordDto } from './dto/reset-password.dto';
+import { UserRole } from '@prisma/client';
+
+const DEMO_GOOGLE_EMAIL = 'demo.customer@servicehub.local';
 
 @Injectable()
 export class AuthService {
@@ -299,6 +302,42 @@ export class AuthService {
     });
 
     return { message: 'Password has been reset successfully' };
+  }
+
+  // DEMO ONLY: Google OAuth is simulated for this portfolio project.
+  // No Google credentials, external authorization, or real user identity is used.
+  async demoGoogleLogin(email: string) {
+    if (email !== DEMO_GOOGLE_EMAIL) {
+      throw new BadRequestException(
+        'Demo Google login is restricted to the fixed local demo identity.',
+      );
+    }
+
+    const user = (await this.prisma.user.upsert({
+      where: { email: DEMO_GOOGLE_EMAIL },
+      update: {},
+      create: {
+        name: 'Demo Customer',
+        email: DEMO_GOOGLE_EMAIL,
+        passwordHash: null,
+        role: UserRole.CUSTOMER,
+      },
+      select: { id: true, name: true, email: true, role: true },
+    }));
+
+    const tokens = await this.generateTokens(user.id, user.email, user.role);
+    await this.saveRefreshToken(user.id, tokens.refreshToken);
+
+    return {
+      user: {
+        id: user.id,
+        name: user.name,
+        email: user.email,
+        role: user.role,
+      },
+      ...tokens,
+      authProvider: 'demo-google' as const,
+    };
   }
 
   private async generateTokens(userId: string, email: string, role: string) {
