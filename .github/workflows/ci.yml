@@ -44,7 +44,18 @@ jobs:
       - name: Create ignored test environment file for Jest
         run: |
           cp .env.test.example .env.test
-          perl -pi -e 's#postgresql://test_user:\*\*\*@localhost:5432/servicehub_test#postgresql://servicehub:servicehub_ci_local_only@localhost:5432/servicehub_test#' .env.test
+          node - <<'NODE'
+          const fs = require('node:fs');
+          const path = '.env.test';
+          let text = fs.readFileSync(path, 'utf8');
+          const set = (key, value) => {
+            text = text.replace(new RegExp(`^${key}=.*$`, 'm'), `${key}=${value}`);
+          };
+          set('DATABASE_URL', process.env.DATABASE_URL);
+          set('JWT_SECRET', process.env.JWT_SECRET);
+          set('PAYMENTS_PROVIDER', process.env.PAYMENTS_PROVIDER);
+          fs.writeFileSync(path, text);
+          NODE
       - run: npm test -- --runInBand --testRegex '.*(spec|int-spec).ts$'
       - run: npm run build
 

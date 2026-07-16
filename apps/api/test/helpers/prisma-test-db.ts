@@ -99,6 +99,7 @@ export async function truncateAll(prisma?: PrismaClient): Promise<void> {
   await db.message.deleteMany();
   await db.notification.deleteMany();
   await db.review.deleteMany();
+  await db.disputeResolution.deleteMany();
   await db.payment.deleteMany();
   await db.booking.deleteMany();
   await db.availability.deleteMany();
