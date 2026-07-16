@@ -1,188 +1,133 @@
 # ServiceHub
 
-> Multi-vendor booking marketplace — restaurants, salons, consultants,
-> repair. Customers discover → book → pay → review. Vendors manage
-> services, availability, and see their earnings.
+> A portfolio-ready **multi-vendor services marketplace**: customers discover and book local services, vendors manage availability and services, and administrators supervise marketplace operations.
 
-Built as a multi-tenant SaaS with three first-class roles:
-**Customer**, **Vendor**, **Admin**. Built in two days as a focused
-MVP that you can actually deploy.
+**Documentation:** [العربية](README.ar.md) · [Português (Brasil)](README.pt-BR.md) · [Architecture](docs/ARCHITECTURE.md) · [Operations](docs/operations/local-and-deploy-runbook.md) · [Acceptance checklist](docs/qa/acceptance-checklist.md)
 
-## Stack
+> **Project status — delivered portfolio MVP (16 July 2026).** The core marketplace flows are implemented and the API test suite currently passes **220/220 tests**. This is not presented as a public production deployment: external OAuth, live payment credentials, email delivery, production monitoring, and browser acceptance evidence are deliberately documented as separate work.
 
-| Layer | Tech |
-| --- | --- |
-| API | NestJS 11 + Prisma 5 + PostgreSQL 16 |
-| Web | Next.js 14 (App Router) + Tailwind v4 |
-| Auth | JWT (refresh tokens, role-based access) |
-| Payments | Pluggable — Stripe (production) or Mock (dev/test) |
-| Real-time | REST polling every 30s (no socket.io dep) |
-| Tests | Jest + ts-jest, 26 specs covering Bookings + Reviews |
+## Why ServiceHub?
 
-## Highlights
+Local service bookings are often fragmented across messages, calls, spreadsheets, and disconnected calendars. ServiceHub turns that into one auditable flow:
 
-- **Race-safe booking engine** with a Postgres `EXCLUDE USING gist`
-  constraint on `(vendorId, tstzrange)` — two simultaneous bookings on
-  the same slot can never both succeed, even under heavy contention.
-- **Provider-agnostic payments** — `StripePaymentProvider` and
-  `MockPaymentProvider` share an interface; flip `PAYMENTS_PROVIDER`
-  to swap. Production refuses to boot in `mock` mode.
-- **Webhook handling** with raw-body capture (Express `verify`),
-  HMAC verification, and idempotent state transitions — replays of
-  the same Stripe event are no-ops.
-- **Distinctive design system** built once and reused everywhere:
-  forest-glass dark UI with Fraunces / Inter / JetBrains Mono, no
-  template scaffolding.
-
-## Features
-
-### Customer
-- Discover vendors by category, search, price range, rating
-- View vendor profiles with services and reviews
-- Book a service for a specific date/slot (5-min hold while paying)
-- Pay via Stripe (or MOCK in dev)
-- Cancel (>24h ahead) with reason
-- Submit 1–5★ reviews after the booking is confirmed
-- Real-time notification inbox (booking confirmed, payment received,
-  payment failed, etc.)
-
-### Vendor
-- Apply (status starts PENDING, admin approves)
-- CRUD services (title, price, durationMinutes, category)
-- Set weekly availability (Mon–Fri 09:00–17:00 etc.) + exceptions
-- See bookings inbox grouped by day
-- Cancel any of their own bookings at any time
-- Dashboard with KPI hero + bookings table
-
-### Admin
-- Approve / suspend vendors
-- KPI snapshot (users, vendors, GMV, commission)
-- 30-day revenue time-series
-- Top vendors leaderboard
-- Disputes queue (customer-cancelled bookings)
-
-## Project layout
-
+```text
+Discover a provider → choose a service and slot → reserve safely → pay → receive updates → review
 ```
+
+It supports restaurants, salons, consultants, repair providers, and similar appointment-based businesses.
+
+## What is included
+
+| Role | Verified product scope |
+|---|---|
+| **Customer** | Search and filters, provider profiles, availability slots, timed booking hold, checkout, cancellation policy, reviews, messages, and notification inbox |
+| **Vendor** | Vendor onboarding status, service management, weekly availability/exceptions, booking visibility, and operational dashboard surfaces |
+| **Admin** | Vendor approval/suspension, marketplace KPIs, reports, disputes, categories, financial-export and payout service layers |
+
+### Engineering highlights
+
+- **Database-enforced booking safety:** PostgreSQL `EXCLUDE USING gist` prevents overlapping active bookings for a vendor, even under concurrent requests.
+- **Payment provider boundary:** development uses a signed Mock provider; the same domain interface supports Stripe for a properly configured production environment.
+- **Defensive security baseline:** role guards, ownership/IDOR checks, bcrypt password hashing, refresh-token revocation, throttling, input validation, and CSRF guard coverage.
+- **Explicit lifecycle rules:** 5-minute payment holds, cancellation conditions, idempotent payment-webhook transitions, and one review per eligible booking.
+- **Clear separation:** Next.js web application, NestJS API modules, Prisma schema/migrations, PostgreSQL, and focused Jest suites.
+
+## Architecture
+
+```mermaid
+flowchart LR
+  C[Customer / Vendor / Admin] --> W[Next.js web application]
+  W --> A[NestJS REST API]
+  A --> P[Prisma]
+  P --> DB[(PostgreSQL)]
+  A --> PAY[Payment provider\nMock for development / Stripe when configured]
+  A --> N[Notifications & domain modules]
+```
+
+| Layer | Technology | Responsibility |
+|---|---|---|
+| Web | Next.js 14, TypeScript, Tailwind | Customer, vendor, and admin journeys |
+| API | NestJS 11, TypeScript | Auth, catalog, availability, bookings, payments, reviews, messaging, admin |
+| Data | PostgreSQL 16, Prisma 5 | Transactional marketplace data and migrations |
+| Tests | Jest + ts-jest | Service, security, integration, and acceptance-oriented checks |
+
+## Repository layout
+
+```text
 apps/
-  api/                    NestJS service
-    prisma/
-      schema.prisma       Single source of truth for the data model
-      migrations/         Forward-only schema migrations
-    src/
-      modules/
-        auth/             register, login, refresh, vendor status, password reset
-        vendors/          public profile + IDOR-safe reads + filters
-        services/         CRUD with IDOR protection
-        categories/       admin CRUD (45 seeded)
-        availability/     weekly schedule + exceptions
-        bookings/         create / available-slots / cancel + EXCLUDE
-        payments/         Stripe + Mock abstraction + webhook handler
-        reviews/          rating + comments + avgRating recompute
-        notifications/    REST polling, fan-out from payments
-        admin/            vendor mgmt + KPIs + reports + disputes
-      shared/
-        modules/prisma/   global PrismaService
-        security/         password hashing (bcrypt)
-    test/setup.ts         Prisma helpers (cleanDatabase, etc.)
-  web/                    Next.js 14
-    src/app/
-      page.tsx            /                discovery + filters
-      vendors/[id]/      vendor profile + services + reviews
-      book/[serviceId]/  date picker + slot grid → booking
-      bookings/          customer's bookings list
-      checkout/[id]/     payment confirmation
-      review/[bookingId]/ 5★ review
-      notifications/     inbox (polling)
-      admin/             dashboard
-      dashboard/         vendor portal
-      (auth)/            login / register / forgot-password / reset-password
-docs/
-  ARCHITECTURE.md
-PLAN.md                   the full roadmap (Phases 1–7 in PLAN, plus the discovery extension)
+  api/                    NestJS API
+    prisma/               schema, migrations, seed utilities
+    src/modules/          domain modules
+    test/                 integration and acceptance-oriented tests
+  web/                    Next.js application
+docs/                     architecture, QA, operations, presentations
+scripts/                  repeatable project utilities
 ```
 
-## Quick start
+## Local setup
+
+### Prerequisites
+
+- Node.js 24.x (the repository is verified with the project Node environment)
+- PostgreSQL 16+
+- A local database and environment file derived from `apps/api/.env.example`
+
+### API
 
 ```bash
-# 1. Database
-createdb servicehub
-createuser servicehub --pwprompt   # password 'servicehub'
-psql -d servicehub -c "CREATE EXTENSION IF NOT EXISTS btree_gist;"
-
-# 2. API
 cd apps/api
-cp .env.example .env              # then edit secrets
+cp .env.example .env             # set local values; never commit this file
 npm install
 npx prisma migrate deploy
 npx prisma generate
-npm run build && npm start
+npm run build
+npm start
+```
 
-# 3. Web (separate terminal)
+The API listens on the prefix `http://localhost:3001/api/v1` when using the repository defaults.
+
+### Web
+
+```bash
 cd apps/web
 npm install
-npm run build && npm start        # http://localhost:3000
+npm run build
+npm start
 ```
 
-For dev with hot-reload:
-```bash
-cd apps/api && npm run start:dev
-cd apps/web && npm run dev
-```
+For development, use `npm run start:dev` inside `apps/api` and `npm run dev` inside `apps/web`.
 
-### MOCK payments
+## Payments and demo boundaries
 
-By default `PAYMENTS_PROVIDER=mock`. The MOCK provider exposes
-`POST /api/v1/payments/mock-confirm` so the frontend can simulate
-"payment succeeded" or "payment failed" without real Stripe keys.
-Switch to `PAYMENTS_PROVIDER=stripe` in production and provide
-`STRIPE_SECRET_KEY` + `STRIPE_WEBHOOK_SECRET`.
+`PAYMENTS_PROVIDER=mock` is for development and portfolio demonstrations. The local mock confirmation endpoint exercises the payment state machine without real card data or external provider credentials.
 
-### Local Stripe webhooks (optional)
+- **Mock mode is not a real payment integration.**
+- A real Stripe path requires valid secrets, verified raw-body webhook handling, deployment configuration, and end-to-end provider testing.
+- The **Google (Demo)** entry point is a local simulation only; it does not contact Google and must not be described as OAuth.
 
-```bash
-stripe listen --forward-to localhost:3001/api/v1/payments/webhook
-```
+## Verification
 
-### Demo authentication (portfolio simulation only)
+The latest independent local verification on **16 July 2026**:
 
-```
-// DEMO ONLY: Google OAuth is simulated for this portfolio project.
-// No Google credentials, external authorization, or real user identity is used.
-```
-
-The **Google (Demo)** button on `/login` does **not** talk to Google. It
-calls a local `POST /api/v1/auth/demo-google-login` endpoint that mints
-a real JWT for a fixed demo `CUSTOMER` identity. **Local only** — no
-external network call, no OAuth SDK, no client ID, no redirect, no real
-user identity. The disclosure is rendered under the button in Arabic
-(مَحاكاة لِلعرض فَقط — لا يَتِم الاتِّصال بـ Google ولا استِخدام حِساب
-حَقيقي) and English so portfolio evaluators cannot mistake the mock
-for a production OAuth integration.
-
-## Tests
-
-```bash
+```text
 cd apps/api
-npx jest bookings    # 13 specs — happy path, overlap, race, cancel rules
-npx jest reviews     # 7 specs — happy path, ownership, duplicate, distribution
+npx jest --runInBand
+
+15 test suites passed
+220 tests passed
+0 snapshots
 ```
 
-## Roadmap
+For the full evidence model and browser QA still to be run, see [`docs/qa/acceptance-checklist.md`](docs/qa/acceptance-checklist.md). A green unit/integration run is not a substitute for production deployment or browser acceptance testing.
 
-| Phase | Status |
-| --- | --- |
-| 1 — Auth (register, login, JWT, password reset) | ✅ |
-| 2 — Vendor dashboard | ✅ |
-| 3 — Booking engine + EXCLUDE constraint | ✅ |
-| 4 — Payments (Stripe + Mock) | ✅ |
-| 5 — Reviews + avgRating | ✅ |
-| 6 — Notifications (REST polling) | ✅ |
-| 7 — Admin dashboard | ✅ |
-| 8 — Discovery (search, filters, vendor profile) | ✅ |
+## Presentation material
 
-See `PLAN.md` for the original spec.
+- [English editable deck](docs/ServiceHub-Presentation-EN.pptx)
+- [Arabic editable deck](docs/ServiceHub-Presentation-AR.pptx)
+- [Portuguese (Brazil) editable deck](docs/ServiceHub-Apresentacao-PT-BR.pptx)
+- [Deck generator](docs/generate_servicehub_multilingual_presentations.py)
+- Product and delivery evidence: [`docs/PRD-COMPLIANCE-REPORT-2026-07-14.md`](docs/PRD-COMPLIANCE-REPORT-2026-07-14.md)
 
 ## License
 
-Proprietary. © 2026.
+Proprietary © 2026. This repository is shared as a portfolio and learning artifact; reuse or redistribution requires permission.
