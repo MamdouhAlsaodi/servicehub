@@ -11,6 +11,9 @@ import { ReviewsModule } from './modules/reviews/reviews.module';
 import { NotificationsModule } from './modules/notifications/notifications.module';
 import { RemindersModule } from './modules/reminders/reminders.module';
 import { AdminModule } from './modules/admin/admin.module';
+import { PayoutsModule } from './modules/payouts/payouts.module';
+import { MessagesModule } from './modules/messages/messages.module';
+import { HealthModule } from './health/health.module';
 
 @Module({
   imports: [
@@ -18,6 +21,7 @@ import { AdminModule } from './modules/admin/admin.module';
       isGlobal: true,
       envFilePath: ['.env'],
     }),
+    HealthModule,
     AuthModule,
     VendorsModule,
     ServicesModule,
@@ -29,6 +33,8 @@ import { AdminModule } from './modules/admin/admin.module';
     NotificationsModule,
     RemindersModule,
     AdminModule,
+    PayoutsModule,
+    MessagesModule,
   ],
 })
 export class AppModule {}

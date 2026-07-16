@@ -40,6 +40,27 @@ enum PaymentProvider {
   MOCK
 }
 
+/// B5 — Local payout-request state machine.
+///
+/// Tracks a vendor's request to withdraw eligible earnings and the
+/// admin's response. Transitions are governed by `PayoutsService`:
+///
+///   REQUESTED → APPROVED → PAID
+///   REQUESTED → REJECTED
+///   APPROVED  → REJECTED
+///
+/// The DB enforces "at most one active (REQUESTED/APPROVED) payout
+/// per vendor" via a partial unique index — see migration
+/// `20260715000300_local_payout_requests`. Marking PAID is purely
+/// a local declaration; no provider call, no bank transfer, no
+/// payout credentials are stored.
+enum PayoutStatus {
+  REQUESTED
+  APPROVED
+  REJECTED
+  PAID
+}
+
 /// Singleton platform configuration. The database migration constrains
 /// the sole row to id=1 so commission changes have one authoritative source.
 model PlatformSettings {
@@ -126,6 +147,7 @@ model VendorProfile {
   services     Service[]
   bookings     Booking[]      @relation("VendorBookings")
   availability Availability[]
+  payouts      PayoutRequest[]
 
   @@index([status])
   @@index([categoryId])
@@ -149,6 +171,8 @@ model Service {
   price           Decimal  @db.Decimal(10, 2)
   durationMinutes Int
   categoryId      String
+  /// B5 — Optional absolute http/https image URL. DTO validates protocol + length.
+  imageUrl        String?
   isActive        Boolean  @default(true)
   createdAt       DateTime @default(now())
   updatedAt       DateTime @updatedAt
@@ -241,12 +265,43 @@ model Review {
   userId    String
   rating    Int
   comment   String?
-  createdAt DateTime @default(now())
+  /// B5 — Defaults to VISIBLE so legacy rows and fresh inserts behave identically.
+  moderationStatus     ReviewModerationStatus @default(VISIBLE)
+  moderationChangedAt  DateTime?
+  moderationNote       String?
+  createdAt            DateTime               @default(now())
 
-  booking Booking @relation(fields: [bookingId], references: [id], onDelete: Cascade)
-  user    User    @relation(fields: [userId], references: [id])
+  booking Booking        @relation(fields: [bookingId], references: [id], onDelete: Cascade)
+  user    User           @relation(fields: [userId], references: [id])
+  reports ReviewReport[]
 
   @@index([userId])
+  @@index([moderationStatus])
+}
+
+/// B5 — Review-report audit record. Reports are NEVER deleted.
+/// Duplicate prevention: UNIQUE (reviewId, reporterUserId); the service
+/// maps P2002 → 409 Conflict. Resolution updates this row AND the
+/// parent Review.moderationStatus atomically.
+model ReviewReport {
+  id                 String              @id @default(cuid())
+  reviewId           String
+  reporterUserId     String
+  reason             String
+  status             ReviewReportStatus  @default(OPEN)
+  /// Resolution audit. All four fields are NULL while OPEN.
+  resolutionAction   ReviewReportAction?
+  resolutionNote     String?
+  resolvedByUserId   String?
+  resolvedAt         DateTime?
+  reportedAt         DateTime            @default(now())
+
+  review Review @relation(fields: [reviewId], references: [id], onDelete: Cascade)
+
+  @@unique([reviewId, reporterUserId])
+  @@index([status])
+  @@index([reviewId])
+  @@index([reporterUserId])
 }
 
 model Message {
@@ -262,6 +317,62 @@ model Message {
 
   @@index([bookingId])
   @@index([senderId])
+}
+
+/// B5 — Local payout-request record. Money stored as DECIMAL(10,2).
+/// No provider, external payout id, account number, IBAN, PIX key, or
+/// any payout credential lives on this row. See `PayoutStatus` enum
+/// doc-comment for the state machine.
+model PayoutRequest {
+  id                String       @id @default(cuid())
+  vendorId          String
+  /// Requested amount in major units (e.g. 100.50). Always > 0.
+  amount            Decimal      @db.Decimal(10, 2)
+  /// MVP currency is fixed to BRL. The DB CHECK constraint enforces
+  /// this even if a future writer bypasses application validation.
+  currency          String       @default("brl")
+  status            PayoutStatus @default(REQUESTED)
+  /// Optional free-text note supplied by the vendor at request time.
+  vendorNote        String?
+  /// Optional free-text reason supplied by the admin on APPROVE / REJECT.
+  adminReason       String?
+  /// Audit fields. Plain strings — not FKs to User — so that purging a
+  /// user for GDPR reasons does not cascade-delete the audit trail.
+  requestedByUserId String
+  decidedByUserId   String?
+  paidByUserId      String?
+  requestedAt       DateTime     @default(now())
+  decidedAt         DateTime?
+  paidAt            DateTime?
+  updatedAt         DateTime     @updatedAt
+
+  vendor VendorProfile @relation(fields: [vendorId], references: [id], onDelete: Cascade)
+
+  @@index([vendorId])
+  @@index([status])
+  @@index([vendorId, requestedAt])
+  @@index([vendorId, status])
+}
+
+/// B5 — Review moderation lifecycle. New reviews default to VISIBLE;
+/// HIDDEN excludes from public list/stats; FLAGGED stays publicly visible
+/// pending admin resolution. No row is ever deleted — see ReviewReport.
+enum ReviewModerationStatus {
+  VISIBLE
+  FLAGGED
+  HIDDEN
+}
+
+/// B5 — Review-report audit states. OPEN → RESOLVED only.
+enum ReviewReportStatus {
+  OPEN
+  RESOLVED
+}
+
+/// B5 — Admin resolution outcomes for an OPEN report.
+enum ReviewReportAction {
+  KEEP_VISIBLE
+  HIDE
 }
 
 model Notification {

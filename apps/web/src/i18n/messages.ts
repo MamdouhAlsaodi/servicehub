@@ -380,6 +380,19 @@ export const messages = {
   'admin.disputes.title': { ar: 'إلغاءات تستحق المراجعة', en: 'Cancellations worth reviewing' },
   'admin.disputes.empty': { ar: 'لا توجد نزاعات ✨', en: 'No disputes ✨' },
   'admin.disputes.reasonPrefix': { ar: 'السبب:', en: 'Reason:' },
+
+  /* B6 Task 14 — booking-thread messaging. */
+  'messages.title': { ar: 'الرسائل', en: 'Messages' },
+  'messages.back': { ar: 'رجوع', en: 'Back' },
+  'messages.empty': { ar: 'لا توجد رسائل بعد. أرسل رسالة لبدء المحادثة.', en: 'No messages yet. Send a message to start the conversation.' },
+  'messages.errorLoad': { ar: 'تعذّر تحميل الرسائل', en: 'Could not load messages' },
+  'messages.errorForbidden': { ar: 'لا يحق لك الوصول إلى هذه المحادثة', en: 'You don\'t have access to this conversation' },
+  'messages.errorSendEmpty': { ar: 'لا يمكن إرسال رسالة فارغة', en: 'Cannot send an empty message' },
+  'messages.placeholder': { ar: 'اكتب رسالتك...', en: 'Type your message...' },
+  'messages.send': { ar: 'إرسال', en: 'Send' },
+  'messages.sending': { ar: 'جاري الإرسال...', en: 'Sending...' },
+  'messages.you': { ar: 'أنت', en: 'You' },
+  'messages.justNow': { ar: 'الآن', en: 'just now' },
 } as const satisfies Catalog;
 
 export type MessageKey = keyof typeof messages;

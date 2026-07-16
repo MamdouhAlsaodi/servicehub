@@ -1,0 +1,20 @@
+# syntax=docker/dockerfile:1
+# Local-development image only. Runtime configuration is supplied by Compose.
+FROM node:24-alpine AS dependencies
+WORKDIR /app
+COPY apps/api/package.json apps/api/package-lock.json ./
+RUN npm ci
+
+FROM dependencies AS build
+COPY apps/api/ ./
+RUN npx prisma generate && npm run build
+
+FROM node:24-alpine AS runtime
+WORKDIR /app
+ENV NODE_ENV=production
+COPY --from=build /app/package.json /app/package-lock.json ./
+COPY --from=build /app/node_modules ./node_modules
+COPY --from=build /app/prisma ./prisma
+COPY --from=build /app/dist ./dist
+EXPOSE 3001
+CMD ["node", "dist/main"]

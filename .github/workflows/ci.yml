@@ -1,0 +1,75 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  api:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_DB: servicehub_test
+          POSTGRES_USER: servicehub
+          POSTGRES_PASSWORD: servicehub_ci_local_only
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U servicehub -d servicehub_test"
+          --health-interval 5s --health-timeout 5s --health-retries 12
+    defaults:
+      run:
+        working-directory: apps/api
+    env:
+      DATABASE_URL: postgresql://servicehub:servicehub_ci_local_only@localhost:5432/servicehub_test
+      JWT_SECRET: ci-local-only-not-a-deployment-secret
+      PAYMENTS_PROVIDER: mock
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: apps/api/package-lock.json
+      - run: npm ci
+      - run: npx prisma validate
+      - run: npx prisma generate
+      - run: npx prisma migrate deploy
+      - name: Create ignored test environment file for Jest
+        run: |
+          cp .env.test.example .env.test
+          perl -pi -e 's#postgresql://test_user:\*\*\*@localhost:5432/servicehub_test#postgresql://servicehub:servicehub_ci_local_only@localhost:5432/servicehub_test#' .env.test
+      - run: npm test -- --runInBand --testRegex '.*(spec|int-spec).ts$'
+      - run: npm run build
+
+  web:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: apps/web
+    env:
+      NEXT_PUBLIC_API_URL: http://localhost:3001/api/v1
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: apps/web/package-lock.json
+      - run: npm ci
+      - run: npm run build
+
+  secret-scan:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Reject common committed credential formats
+        run: |
+          ! grep -RInE --exclude-dir=.git --exclude-dir=node_modules --exclude='package-lock.json' \
+            '(AKIA[0-9A-Z]{16}|gh[pousr]_[A-Za-z0-9_]{20,}|sk_(live|test)_[A-Za-z0-9]{20,}|-----BEGIN( [A-Z]+)? PRIVATE KEY-----)' .
