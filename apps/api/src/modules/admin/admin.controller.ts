@@ -18,6 +18,7 @@
 import {
   Controller,
   Get,
+  Post,
   Patch,
   Param,
   Body,
@@ -34,6 +35,8 @@ import { Roles } from '../auth/decorators/roles.decorator';
 import { UserRole } from '@prisma/client';
 import { UpdateCommissionSettingsDto } from './dto/update-commission-settings.dto';
 import { FinancialExportQueryDto } from './dto/financial-export-query.dto';
+import { ResolveDisputeDto } from './dto/resolve-dispute.dto';
+import { CurrentUser } from '../auth/decorators/current-user.decorator';
 
 @Controller('admin')
 @UseGuards(JwtAuthGuard, RolesGuard)
@@ -105,6 +108,16 @@ export class AdminController {
   @Get('disputes')
   disputes() {
     return this.adminService.listDisputes();
+  }
+
+  /** This resolves the cancelled-booking queue; it is not a customer claims portal. */
+  @Post('disputes/:bookingId/resolve')
+  resolveDispute(
+    @Param('bookingId') bookingId: string,
+    @Body() dto: ResolveDisputeDto,
+    @CurrentUser('id') adminUserId: string,
+  ) {
+    return this.adminService.resolveDispute(bookingId, adminUserId, dto);
   }
 
   /* FINANCIAL EXPORT (B5) */

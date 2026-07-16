@@ -40,6 +40,20 @@ enum PaymentProvider {
   MOCK
 }
 
+/// Admin dispute candidates are currently cancelled bookings, rather than
+/// customer-opened claims. A row is claimed before a provider refund so one
+/// booking can have only one final administrative decision.
+enum DisputeResolutionAction {
+  FULL_REFUND
+  PARTIAL_REFUND
+  REJECT
+}
+
+enum DisputeResolutionStatus {
+  PROCESSING
+  RESOLVED
+}
+
 /// B5 — Local payout-request state machine.
 ///
 /// Tracks a vendor's request to withdraw eligible earnings and the
@@ -221,12 +235,13 @@ model Booking {
   /// queries but cannot mutate it directly.
   timeRange          Unsupported("tstzrange")?
 
-  customer User          @relation("CustomerBookings", fields: [customerId], references: [id])
-  vendor   VendorProfile @relation("VendorBookings", fields: [vendorId], references: [id])
-  service  Service       @relation(fields: [serviceId], references: [id])
-  payment  Payment?
-  review   Review?
-  messages Message[]
+  customer          User               @relation("CustomerBookings", fields: [customerId], references: [id])
+  vendor            VendorProfile      @relation("VendorBookings", fields: [vendorId], references: [id])
+  service           Service            @relation(fields: [serviceId], references: [id])
+  payment           Payment?
+  disputeResolution DisputeResolution?
+  review            Review?
+  messages          Message[]
 
   @@index([vendorId, startTime, endTime])
   @@index([customerId])
@@ -257,6 +272,27 @@ model Payment {
 
   @@index([status])
   @@index([provider, externalId])
+}
+
+/// Immutable-in-intent audit record for an administrative resolution. The
+/// unique bookingId is the durable concurrency claim; PROCESSING exists only
+/// while a requested provider refund is in flight.
+model DisputeResolution {
+  id              String                  @id @default(cuid())
+  bookingId       String                  @unique
+  action          DisputeResolutionAction
+  amount          Decimal?                @db.Decimal(10, 2)
+  reason          String
+  status          DisputeResolutionStatus @default(PROCESSING)
+  decidedByUserId String
+  decidedAt       DateTime                @default(now())
+  resolvedAt      DateTime?
+
+  booking Booking @relation(fields: [bookingId], references: [id], onDelete: Cascade)
+
+  @@index([status])
+  @@index([decidedByUserId])
+  @@index([decidedAt])
 }
 
 model Review {

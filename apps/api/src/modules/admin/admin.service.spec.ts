@@ -19,10 +19,14 @@ import {
 import { AdminService } from './admin.service';
 import { UpdateCommissionSettingsDto } from './dto/update-commission-settings.dto';
 import { PrismaService } from '../../shared/modules/prisma/prisma.service';
+import { PaymentsService, RefundProviderException } from '../payments/payments.service';
+import { ResolveDisputeDto } from './dto/resolve-dispute.dto';
 import { prisma, cleanDatabase, disconnectPrisma } from '../../test/setup';
 import {
   BookingStatus,
+  DisputeResolutionAction,
   PaymentStatus,
+  Prisma,
   UserRole,
   VendorStatus,
 } from '@prisma/client';
@@ -94,7 +98,11 @@ describe('AdminService', () => {
     await cleanDatabase();
     await prisma.platformSettings.deleteMany();
     const module: TestingModule = await Test.createTestingModule({
-      providers: [AdminService, { provide: PrismaService, useValue: prisma }],
+      providers: [
+        AdminService,
+        { provide: PrismaService, useValue: prisma },
+        { provide: PaymentsService, useValue: { refund: jest.fn() } },
+      ],
     }).compile();
     service = module.get<AdminService>(AdminService);
 
@@ -315,5 +323,44 @@ describe('AdminService', () => {
       expect(disputes[0].id).toBe(b.id);
       expect(disputes[0].cancellationReason).toBe('plans changed');
     });
+  });
+});
+
+describe('AdminService dispute resolution unit workflow', () => {
+  const booking: any = { id: 'booking-1', status: BookingStatus.CANCELLED, cancellationReason: 'changed plans', cancelledBy: 'customer-1', payment: { amount: new Prisma.Decimal('100.00'), refundedAmount: new Prisma.Decimal('0.00'), status: PaymentStatus.SUCCEEDED } };
+  let records: any[]; let paymentRefund: jest.Mock; let service: AdminService;
+  beforeEach(() => {
+    records = []; paymentRefund = jest.fn().mockResolvedValue({});
+    const db: any = { booking: { findUnique: jest.fn().mockResolvedValue(booking) }, disputeResolution: {
+      create: jest.fn(async ({ data }) => { if (records.some((r) => r.bookingId === data.bookingId)) throw new Prisma.PrismaClientKnownRequestError('duplicate', { code: 'P2002', clientVersion: 'test' }); const record = { id: 'resolution-1', decidedAt: new Date(), ...data }; records.push(record); return record; }),
+      update: jest.fn(async ({ where, data }) => Object.assign(records.find((r) => r.bookingId === where.bookingId), data)),
+      delete: jest.fn(async ({ where }) => { records = records.filter((r) => r.bookingId !== where.bookingId); }),
+    }, $transaction: jest.fn(async (arg) => typeof arg === 'function' ? arg(db) : arg) };
+    service = new AdminService(db as PrismaService, { refund: paymentRefund } as unknown as PaymentsService);
+  });
+  const dto = (action: DisputeResolutionAction, amount?: number): ResolveDisputeDto => ({ action, reason: 'reviewed by admin', amount });
+  it('records REJECT with no provider refund', async () => {
+    const result = await service.resolveDispute('booking-1', 'admin-1', dto(DisputeResolutionAction.REJECT));
+    expect(result).toMatchObject({ action: 'REJECT', amount: null, status: 'RESOLVED' }); expect(paymentRefund).not.toHaveBeenCalled();
+  });
+  it('claims then completes full and partial refunds through PaymentsService', async () => {
+    const full = await service.resolveDispute('booking-1', 'admin-1', dto(DisputeResolutionAction.FULL_REFUND));
+    expect(full).toMatchObject({ amount: 100, status: 'RESOLVED' }); expect(paymentRefund).toHaveBeenCalledWith('booking-1', { id: 'admin-1', role: 'ADMIN' }, 100);
+    records = []; await service.resolveDispute('booking-1', 'admin-1', dto(DisputeResolutionAction.PARTIAL_REFUND, 25.5));
+    expect(paymentRefund).toHaveBeenLastCalledWith('booking-1', { id: 'admin-1', role: 'ADMIN' }, 25.5);
+  });
+  it('rejects invalid state and invalid partial amounts before a provider call', async () => {
+    await expect(service.resolveDispute('booking-1', 'admin-1', dto(DisputeResolutionAction.PARTIAL_REFUND, 100))).rejects.toThrow(BadRequestException);
+    await expect(service.resolveDispute('booking-1', 'admin-1', dto(DisputeResolutionAction.PARTIAL_REFUND, 1.001))).rejects.toThrow(BadRequestException);
+    booking.status = BookingStatus.CONFIRMED; await expect(service.resolveDispute('booking-1', 'admin-1', dto(DisputeResolutionAction.REJECT))).rejects.toThrow(BadRequestException); booking.status = BookingStatus.CANCELLED;
+    expect(paymentRefund).not.toHaveBeenCalled();
+  });
+  it('permits only one concurrent durable claim and one provider call', async () => {
+    await Promise.allSettled([service.resolveDispute('booking-1', 'admin-1', dto(DisputeResolutionAction.FULL_REFUND)), service.resolveDispute('booking-1', 'admin-2', dto(DisputeResolutionAction.FULL_REFUND))]);
+    expect(paymentRefund).toHaveBeenCalledTimes(1);
+  });
+  it('releases only an explicit provider-failure claim for a safe retry', async () => {
+    paymentRefund.mockRejectedValueOnce(new RefundProviderException('provider down'));
+    await expect(service.resolveDispute('booking-1', 'admin-1', dto(DisputeResolutionAction.FULL_REFUND))).rejects.toThrow(BadRequestException); expect(records).toHaveLength(0);
   });
 });

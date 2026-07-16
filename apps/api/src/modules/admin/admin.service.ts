@@ -26,7 +26,16 @@ import {
   NotFoundException,
 } from '@nestjs/common';
 import { PrismaService } from '../../shared/modules/prisma/prisma.service';
-import { BookingStatus, PaymentStatus, VendorStatus, Prisma } from '@prisma/client';
+import {
+  BookingStatus,
+  DisputeResolutionAction,
+  DisputeResolutionStatus,
+  PaymentStatus,
+  VendorStatus,
+  Prisma,
+} from '@prisma/client';
+import { PaymentsService, RefundProviderException } from '../payments/payments.service';
+import { ResolveDisputeDto } from './dto/resolve-dispute.dto';
 
 const PLATFORM_SETTINGS_ID = 1;
 const DEFAULT_COMMISSION_RATE = new Prisma.Decimal('0.10');
@@ -37,7 +46,10 @@ const COMMISSION_VALIDATION_MESSAGE =
 export class AdminService {
   private readonly logger = new Logger(AdminService.name);
 
-  constructor(private readonly prisma: PrismaService) {}
+  constructor(
+    private readonly prisma: PrismaService,
+    private readonly paymentsService: PaymentsService,
+  ) {}
 
   /* ═══════════════════════════════════════════
      PLATFORM SETTINGS
@@ -276,13 +288,13 @@ export class AdminService {
   }
 
   /* ═══════════════════════════════════════════
-     DISPUTES (placeholder: stub for Phase 7.x)
+     DISPUTES — Admin resolution of cancelled-booking candidates
      ═══════════════════════════════════════════ */
 
   async listDisputes() {
-    /* Disputes aren't in the schema yet; for now we surface
-     * CANCELLED bookings with non-system cancellation reasons as
-     * the de facto dispute queue. */
+    /* The current MVP queue consists of customer-cancelled bookings with
+     * a non-system reason. Resolution is recorded separately in
+     * DisputeResolution; this is not a customer claim-opening portal. */
     return this.prisma.booking.findMany({
       where: {
         status: BookingStatus.CANCELLED,
@@ -297,5 +309,89 @@ export class AdminService {
         service: { select: { title: true } },
       },
     });
+  }
+
+  async resolveDispute(bookingId: string, adminUserId: string, dto: ResolveDisputeDto) {
+    const reason = dto.reason?.trim();
+    if (!reason) throw new BadRequestException('reason is required');
+    if ((dto.action === DisputeResolutionAction.REJECT || dto.action === DisputeResolutionAction.FULL_REFUND) && dto.amount !== undefined) {
+      throw new BadRequestException(`${dto.action} must not include an amount`);
+    }
+
+    const claim = await this.prisma.$transaction(async (tx) => {
+      const booking = await tx.booking.findUnique({ where: { id: bookingId }, include: { payment: true } });
+      if (!booking) throw new NotFoundException('Booking not found');
+      if (booking.status !== BookingStatus.CANCELLED) throw new BadRequestException('Only cancelled bookings are dispute candidates');
+      if (!booking.cancellationReason?.trim() || booking.cancelledBy === 'system:payment') {
+        throw new BadRequestException('Booking is not an admin dispute candidate');
+      }
+      if (!booking.payment) throw new ConflictException('Booking has no payment');
+
+      const remaining = new Prisma.Decimal(booking.payment.amount).minus(booking.payment.refundedAmount);
+      if (remaining.lessThanOrEqualTo(0)) throw new ConflictException('Payment has no refundable balance');
+      let amount: Prisma.Decimal | null = null;
+      if (dto.action === DisputeResolutionAction.FULL_REFUND) {
+        amount = remaining;
+      } else if (dto.action === DisputeResolutionAction.PARTIAL_REFUND) {
+        if (typeof dto.amount !== 'number' || !Number.isFinite(dto.amount)) {
+          throw new BadRequestException('PARTIAL_REFUND requires a finite positive amount');
+        }
+        amount = new Prisma.Decimal(dto.amount.toString());
+        if (amount.decimalPlaces() > 2 || amount.lessThanOrEqualTo(0) || amount.greaterThanOrEqualTo(remaining)) {
+          throw new BadRequestException('Partial refund must be positive, have at most 2 decimals, and be less than the remaining balance');
+        }
+      }
+      if (dto.action !== DisputeResolutionAction.REJECT && booking.payment.status !== PaymentStatus.SUCCEEDED && booking.payment.status !== PaymentStatus.PARTIALLY_REFUNDED) {
+        throw new ConflictException('Payment is not refundable');
+      }
+
+      try {
+        return await tx.disputeResolution.create({
+          data: {
+            bookingId, action: dto.action, amount, reason, decidedByUserId: adminUserId,
+            status: dto.action === DisputeResolutionAction.REJECT ? DisputeResolutionStatus.RESOLVED : DisputeResolutionStatus.PROCESSING,
+            resolvedAt: dto.action === DisputeResolutionAction.REJECT ? new Date() : null,
+          },
+        });
+      } catch (error) {
+        if (error instanceof Prisma.PrismaClientKnownRequestError && error.code === 'P2002') {
+          throw new ConflictException('This dispute already has a resolution decision');
+        }
+        throw error;
+      }
+    });
+
+    if (claim.action === DisputeResolutionAction.REJECT) return this.auditResponse(claim);
+    try {
+      await this.paymentsService.refund(bookingId, { id: adminUserId, role: 'ADMIN' }, Number(claim.amount));
+    } catch (error) {
+      /* Only an explicit pre-write provider rejection is retryable. Any other
+       * error retains PROCESSING for reconciliation, preventing a double refund. */
+      if (error instanceof RefundProviderException) {
+        await this.prisma.disputeResolution.delete({ where: { bookingId } });
+        throw new BadRequestException('Refund provider rejected the request; no decision was recorded');
+      }
+      this.logger.error(`Refund outcome for dispute ${bookingId} requires reconciliation`, error instanceof Error ? error.stack : undefined);
+      throw new ConflictException('Refund outcome is processing and requires reconciliation');
+    }
+
+    const resolved = await this.prisma.$transaction((tx) => tx.disputeResolution.update({
+      where: { bookingId }, data: { status: DisputeResolutionStatus.RESOLVED, resolvedAt: new Date() },
+    }));
+    return this.auditResponse(resolved);
+  }
+
+  private auditResponse(resolution: {
+    bookingId: string; action: DisputeResolutionAction; amount: Prisma.Decimal | null;
+    reason: string; status: DisputeResolutionStatus; decidedByUserId: string;
+    decidedAt: Date; resolvedAt: Date | null;
+  }) {
+    return {
+      bookingId: resolution.bookingId, action: resolution.action,
+      amount: resolution.amount === null ? null : Number(resolution.amount),
+      reason: resolution.reason, status: resolution.status,
+      decidedByUserId: resolution.decidedByUserId, decidedAt: resolution.decidedAt,
+      resolvedAt: resolution.resolvedAt,
+    };
   }
 }

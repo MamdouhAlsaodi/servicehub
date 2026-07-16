@@ -343,15 +343,9 @@ export class AuthService {
   private async generateTokens(userId: string, email: string, role: string) {
     const payload = { sub: userId, email, role };
 
-    const accessToken = this.jwtService.sign(payload, {
-      secret: process.env.JWT_SECRET,
-      expiresIn: '15m',
-    });
+    const accessToken = this.jwtService.sign(payload, { expiresIn: '15m' });
 
-    const refreshToken = this.jwtService.sign(payload, {
-      secret: process.env.JWT_SECRET,
-      expiresIn: '7d',
-    });
+    const refreshToken = this.jwtService.sign(payload, { expiresIn: '7d' });
 
     return { accessToken, refreshToken };
   }

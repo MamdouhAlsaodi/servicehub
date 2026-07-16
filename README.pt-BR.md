@@ -4,7 +4,7 @@
 
 **Idiomas:** [English](README.md) · [العربية](README.ar.md)
 
-> **Status: MVP de portfólio entregue — 16 de julho de 2026.** Os fluxos centrais foram implementados e a verificação local mais recente aprovou **220/220 testes da API**. Isso não significa publicação pública nem operação comercial de pagamentos reais.
+> **Status: MVP de portfólio após hardening — 16 de julho de 2026.** A verificação local mais recente aprovou **242/242 testes da API em 17 suites**, após reforço de autorização e fluxos financeiros. Isso não significa publicação pública nem operação comercial de pagamentos reais.
 
 ## Problema e proposta
 
@@ -28,7 +28,8 @@ O modelo atende salões, restaurantes, consultores, manutenção e outros negóc
 
 - **Proteção contra dupla reserva no banco:** uma constraint PostgreSQL `EXCLUDE USING gist` impede sobreposição de reservas ativas do mesmo fornecedor.
 - **Pagamentos desacoplados:** Mock para desenvolvimento/demonstração e uma fronteira de provider para Stripe quando configurado corretamente.
-- **Segurança de aplicação:** roles, ownership/IDOR checks, bcrypt, revogação de refresh token, throttling, validação e cobertura de CSRF.
+- **Segurança de aplicação:** JWT e CORS explícitos em produção, roles, ownership/IDOR checks, bcrypt, revogação de refresh token, throttling por rota, validação e cobertura de CSRF.
+- **Decisão financeira auditável:** Admin resolve a fila de reservas canceladas com `FULL_REFUND`, `PARTIAL_REFUND` ou `REJECT`, incluindo motivo, registro durável e proteção contra decisão duplicada.
 - **Regras de domínio:** hold de pagamento de 5 minutos, política de cancelamento, webhooks idempotentes e uma avaliação por reserva elegível.
 
 ## Arquitetura
@@ -79,7 +80,7 @@ cd apps/api
 npx jest --runInBand
 ```
 
-Resultado: **15 suites aprovadas e 220 testes aprovados**.
+Resultado: **17 suites aprovadas e 242 testes aprovados**.
 
 O arquivo [`docs/qa/acceptance-checklist.md`](docs/qa/acceptance-checklist.md) separa evidência automatizada das validações de navegador e produção que ainda precisam ser executadas.
 

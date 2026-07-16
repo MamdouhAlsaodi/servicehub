@@ -31,6 +31,7 @@ import { PrismaService } from '../../shared/modules/prisma/prisma.service';
 import {
   BookingStatus,
   PaymentStatus,
+  UserRole,
 } from '@prisma/client';
 import { Decimal } from '@prisma/client/runtime/library';
 import { PaymentProvider } from './providers/payment-provider.interface';
@@ -38,6 +39,12 @@ import { NotificationsService } from '../notifications/notifications.service';
 
 const HOLD_MINUTES = 5;
 const MIN_REFUND_AMOUNT = 1; // major units
+
+export type PaymentActor = { id: string; role: UserRole };
+
+/** Distinguishes a provider rejection from a post-provider persistence error.
+ * Callers may safely release an idempotency claim only for this error. */
+export class RefundProviderException extends Error {}
 
 @Injectable()
 export class PaymentsService {
@@ -367,34 +374,42 @@ export class PaymentsService {
      REFUND (user-initiated)
      ═══════════════════════════════════════════ */
 
-  async refund(bookingId: string, userId: string, amount?: number) {
+  async refund(bookingId: string, actor: PaymentActor, amount?: number) {
     const booking = await this.prisma.booking.findUnique({
       where: { id: bookingId },
       include: { payment: true, vendor: true },
     });
     if (!booking) throw new NotFoundException('Booking not found');
     if (!booking.payment) throw new NotFoundException('No payment for this booking');
-    if (booking.payment.status !== PaymentStatus.SUCCEEDED) {
-      throw new BadRequestException('Only succeeded payments can be refunded');
+    if (
+      booking.payment.status !== PaymentStatus.SUCCEEDED &&
+      booking.payment.status !== PaymentStatus.PARTIALLY_REFUNDED
+    ) {
+      throw new BadRequestException('Only succeeded or partially refunded payments can be refunded');
     }
 
-    /* Authorization: customer who booked, the vendor, or an admin. */
-    const isCustomer = booking.customerId === userId;
-    const isAdmin = false; // wire-up to role check; kept minimal here.
-    if (!isCustomer && !isAdmin) {
+    const isCustomer =
+      actor.role === UserRole.CUSTOMER && booking.customerId === actor.id;
+    const isOwningVendor =
+      actor.role === UserRole.VENDOR && booking.vendor.userId === actor.id;
+    const isAdmin = actor.role === UserRole.ADMIN;
+    if (!isCustomer && !isOwningVendor && !isAdmin) {
       throw new ForbiddenException('You cannot refund this booking');
     }
 
     const refundAmount =
       amount ?? Number(booking.payment.amount) - Number(booking.payment.refundedAmount);
-    if (refundAmount <= 0) {
+    const remaining = Number(booking.payment.amount) - Number(booking.payment.refundedAmount);
+    if (!Number.isFinite(refundAmount) || refundAmount <= 0 || refundAmount > remaining) {
       throw new BadRequestException('Nothing to refund');
     }
 
-    const result = await this.provider.refund(
-      booking.payment.externalId,
-      refundAmount,
-    );
+    let result: { status: PaymentStatus; refundedAmount: number };
+    try {
+      result = await this.provider.refund(booking.payment.externalId, refundAmount);
+    } catch (error) {
+      throw new RefundProviderException('Refund provider request failed', { cause: error });
+    }
 
     return this.prisma.payment.update({
       where: { id: booking.payment.id },

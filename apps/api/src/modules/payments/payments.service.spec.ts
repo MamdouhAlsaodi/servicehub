@@ -22,7 +22,7 @@ import { PaymentsService } from './payments.service';
 import { PrismaService } from '../../shared/modules/prisma/prisma.service';
 import { NotificationsService } from '../notifications/notifications.service';
 import { PaymentProvider } from './providers/payment-provider.interface';
-import { BookingStatus, PaymentStatus, PaymentProvider as PrismaPaymentProvider, Prisma } from '@prisma/client';
+import { BookingStatus, PaymentStatus, PaymentProvider as PrismaPaymentProvider, Prisma, UserRole } from '@prisma/client';
 
 /* ─────────────────────────────────────────────────────────────────
    TYPES
@@ -444,8 +444,47 @@ describe('PaymentsService', () => {
       mockPrisma.booking!.findUnique = jest.fn().mockResolvedValue(booking);
 
       await expect(
-        service.refund(booking.id, 'stranger-user'),
+        service.refund(booking.id, { id: 'stranger-user', role: UserRole.VENDOR }),
       ).rejects.toThrow(ForbiddenException);
+    });
+
+    it('(TEST 8a) permits the booking customer to refund', async () => {
+      const payment = mkPayment({ status: PaymentStatus.SUCCEEDED });
+      const booking = mkBooking({ payment });
+      mockPrisma.booking!.findUnique = jest.fn().mockResolvedValue(booking);
+
+      await service.refund(booking.id, {
+        id: booking.customerId,
+        role: UserRole.CUSTOMER,
+      });
+
+      expect(mockProvider.refund).toHaveBeenCalledWith(payment.externalId, 150);
+    });
+
+    it('(TEST 8a) permits the owning vendor to refund', async () => {
+      const payment = mkPayment({ status: PaymentStatus.SUCCEEDED });
+      const booking = mkBooking({ payment });
+      mockPrisma.booking!.findUnique = jest.fn().mockResolvedValue(booking);
+
+      await service.refund(booking.id, {
+        id: booking.vendor.userId,
+        role: UserRole.VENDOR,
+      });
+
+      expect(mockProvider.refund).toHaveBeenCalledWith(payment.externalId, 150);
+    });
+
+    it('(TEST 8a) permits an admin to refund any booking', async () => {
+      const payment = mkPayment({ status: PaymentStatus.SUCCEEDED });
+      const booking = mkBooking({ payment });
+      mockPrisma.booking!.findUnique = jest.fn().mockResolvedValue(booking);
+
+      await service.refund(booking.id, {
+        id: 'admin-user',
+        role: UserRole.ADMIN,
+      });
+
+      expect(mockProvider.refund).toHaveBeenCalledWith(payment.externalId, 150);
     });
 
     it('(TEST 8b) rejects refund with amount <= 0', async () => {
@@ -461,26 +500,26 @@ describe('PaymentsService', () => {
       });
 
       await expect(
-        service.refund(booking.id, booking.customerId),
+        service.refund(booking.id, { id: booking.customerId, role: UserRole.CUSTOMER }),
       ).rejects.toThrow(BadRequestException);
 
       await expect(
-        service.refund(booking.id, booking.customerId),
+        service.refund(booking.id, { id: booking.customerId, role: UserRole.CUSTOMER }),
       ).rejects.toThrow('Nothing to refund');
     });
 
-    it('(TEST 8c) rejects refund on non-succeeded payment', async () => {
+    it('(TEST 8c) rejects refund on a payment that has no refundable success state', async () => {
       const payment = mkPayment({ status: PaymentStatus.PENDING });
       const booking = mkBooking({ payment });
       mockPrisma.booking!.findUnique = jest.fn().mockResolvedValue(booking);
 
       await expect(
-        service.refund(booking.id, booking.customerId),
+        service.refund(booking.id, { id: booking.customerId, role: UserRole.CUSTOMER }),
       ).rejects.toThrow(BadRequestException);
 
       await expect(
-        service.refund(booking.id, booking.customerId),
-      ).rejects.toThrow('Only succeeded payments can be refunded');
+        service.refund(booking.id, { id: booking.customerId, role: UserRole.CUSTOMER }),
+      ).rejects.toThrow('Only succeeded or partially refunded payments can be refunded');
     });
 
     it('(TEST 8d) rejects refund for booking with no payment', async () => {
@@ -488,7 +527,7 @@ describe('PaymentsService', () => {
       mockPrisma.booking!.findUnique = jest.fn().mockResolvedValue(booking);
 
       await expect(
-        service.refund(booking.id, booking.customerId),
+        service.refund(booking.id, { id: booking.customerId, role: UserRole.CUSTOMER }),
       ).rejects.toThrow(NotFoundException);
     });
 
@@ -507,7 +546,7 @@ describe('PaymentsService', () => {
         mkPayment({ status: PaymentStatus.REFUNDED, refundedAmount: '150.00' }),
       );
 
-      const result = await service.refund(booking.id, booking.customerId);
+      const result = await service.refund(booking.id, { id: booking.customerId, role: UserRole.CUSTOMER });
 
       expect(mockProvider.refund).toHaveBeenCalledWith(
         payment.externalId,

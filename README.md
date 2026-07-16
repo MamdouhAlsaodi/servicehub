@@ -4,7 +4,7 @@
 
 **Documentation:** [العربية](README.ar.md) · [Português (Brasil)](README.pt-BR.md) · [Architecture](docs/ARCHITECTURE.md) · [Operations](docs/operations/local-and-deploy-runbook.md) · [Acceptance checklist](docs/qa/acceptance-checklist.md)
 
-> **Project status — delivered portfolio MVP (16 July 2026).** The core marketplace flows are implemented and the API test suite currently passes **220/220 tests**. This is not presented as a public production deployment: external OAuth, live payment credentials, email delivery, production monitoring, and browser acceptance evidence are deliberately documented as separate work.
+> **Project status — hardened portfolio MVP (16 July 2026).** The API suite passes **242/242 tests across 17 suites** after an authorization and financial-workflow hardening pass. This is not presented as a public production deployment: external OAuth, live payment credentials, email delivery, production monitoring, and browser acceptance evidence remain separate work.
 
 ## Why ServiceHub?
 
@@ -28,7 +28,8 @@ It supports restaurants, salons, consultants, repair providers, and similar appo
 
 - **Database-enforced booking safety:** PostgreSQL `EXCLUDE USING gist` prevents overlapping active bookings for a vendor, even under concurrent requests.
 - **Payment provider boundary:** development uses a signed Mock provider; the same domain interface supports Stripe for a properly configured production environment.
-- **Defensive security baseline:** role guards, ownership/IDOR checks, bcrypt password hashing, refresh-token revocation, throttling, input validation, and CSRF guard coverage.
+- **Defensive security baseline:** explicit JWT and CORS production configuration, role guards, ownership/IDOR checks, bcrypt password hashing, refresh-token revocation, route-level throttling, input validation, and CSRF guard coverage.
+- **Auditable financial decisions:** customer/vendor/admin refund authorization plus an Admin-only cancelled-booking dispute decision (`FULL_REFUND`, `PARTIAL_REFUND`, or `REJECT`) with durable audit records and duplicate-decision protection.
 - **Explicit lifecycle rules:** 5-minute payment holds, cancellation conditions, idempotent payment-webhook transitions, and one review per eligible booking.
 - **Clear separation:** Next.js web application, NestJS API modules, Prisma schema/migrations, PostgreSQL, and focused Jest suites.
 
@@ -113,8 +114,8 @@ The latest independent local verification on **16 July 2026**:
 cd apps/api
 npx jest --runInBand
 
-15 test suites passed
-220 tests passed
+17 test suites passed
+242 tests passed
 0 snapshots
 ```
 

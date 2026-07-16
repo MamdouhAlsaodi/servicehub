@@ -26,13 +26,18 @@ import {
   HttpStatus,
   UseGuards,
   BadRequestException,
+  ForbiddenException,
   NotFoundException,
 } from '@nestjs/common';
+import { UserRole } from '@prisma/client';
 import { Request } from 'express';
 import { PaymentsService } from './payments.service';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
 import { CurrentUser } from '../auth/decorators/current-user.decorator';
 import { MockPaymentProvider } from './providers/mock-payment.provider';
+import { PrismaService } from '../../shared/modules/prisma/prisma.service';
+
+type PaymentActor = { id: string; role: UserRole };
 
 @Controller('payments')
 export class PaymentsController {
@@ -40,6 +45,7 @@ export class PaymentsController {
     private readonly paymentsService: PaymentsService,
     /** Injected lazily so the controller doesn't need a hard dep on Mock. */
     private readonly mock: MockPaymentProvider | undefined,
+    private readonly prisma: PrismaService,
   ) {}
 
   /* ═══════════════════════════════════════════
@@ -129,11 +135,11 @@ export class PaymentsController {
   @UseGuards(JwtAuthGuard)
   @HttpCode(HttpStatus.OK)
   async refund(
-    @CurrentUser('id') userId: string,
+    @CurrentUser() actor: PaymentActor,
     @Param('bookingId') bookingId: string,
     @Body() body: { amount?: number },
   ) {
-    return this.paymentsService.refund(bookingId, userId, body?.amount);
+    return this.paymentsService.refund(bookingId, actor, body?.amount);
   }
 
   /* ═══════════════════════════════════════════
@@ -142,58 +148,47 @@ export class PaymentsController {
 
   @Get('me')
   @UseGuards(JwtAuthGuard)
-  async myPayments(@CurrentUser('id') userId: string) {
-    return this.findPaymentsForUser(userId);
+  async myPayments(@CurrentUser() actor: PaymentActor) {
+    return this.findPaymentsForUser(actor);
   }
 
   @Get(':paymentId')
   @UseGuards(JwtAuthGuard)
   async findOne(
-    @CurrentUser('id') userId: string,
+    @CurrentUser() actor: PaymentActor,
     @Param('paymentId') paymentId: string,
   ) {
-    /* Lookup pattern mirrors BookingsService — see authorization
-     * notes there. */
-    const { PrismaService } = await import('../../shared/modules/prisma/prisma.service');
-    const prisma = new PrismaService();
-    try {
-      const p = await prisma.payment.findUnique({
-        where: { id: paymentId },
-        include: { booking: { include: { vendor: true } } },
-      });
-      if (!p) throw new NotFoundException('Payment not found');
-      const isCustomer = p.booking.customerId === userId;
-      // Vendor access: fetch the user's vendor profile to compare ids.
-      // We keep this minimal here; the canonical check is in
-      // BookingsService.findOne.
-      if (!isCustomer) {
-        throw new BadRequestException(
-          'You cannot view this payment',
-        );
-      }
-      return p;
-    } finally {
-      await prisma.$disconnect();
+    const payment = await this.prisma.payment.findUnique({
+      where: { id: paymentId },
+      include: { booking: { include: { vendor: true } } },
+    });
+    if (!payment) throw new NotFoundException('Payment not found');
+
+    const permitted =
+      actor.role === UserRole.ADMIN ||
+      (actor.role === UserRole.CUSTOMER && payment.booking.customerId === actor.id) ||
+      (actor.role === UserRole.VENDOR && payment.booking.vendor.userId === actor.id);
+    if (!permitted) {
+      throw new ForbiddenException('You cannot view this payment');
     }
+    return payment;
   }
 
   /* ═══════════════════════════════════════════
      Internal helper — minimal, avoids cross-module coupling.
      ═══════════════════════════════════════════ */
 
-  private async findPaymentsForUser(userId: string) {
-    /* Direct Prisma access for now — in Phase 5 this moves behind
-     * a PaymentsRepository. */
-    const { PrismaService } = await import('../../shared/modules/prisma/prisma.service');
-    const prisma = new PrismaService();
-    try {
-      return prisma.payment.findMany({
-        where: { booking: { customerId: userId } },
-        orderBy: { createdAt: 'desc' },
-        include: { booking: { select: { id: true, startTime: true, status: true } } },
-      });
-    } finally {
-      await prisma.$disconnect();
-    }
+  private async findPaymentsForUser(actor: PaymentActor) {
+    const where =
+      actor.role === UserRole.ADMIN
+        ? {}
+        : actor.role === UserRole.VENDOR
+          ? { booking: { vendor: { userId: actor.id } } }
+          : { booking: { customerId: actor.id } };
+    return this.prisma.payment.findMany({
+      where,
+      orderBy: { createdAt: 'desc' },
+      include: { booking: { select: { id: true, startTime: true, status: true } } },
+    });
   }
 }

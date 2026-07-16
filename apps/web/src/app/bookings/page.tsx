@@ -34,14 +34,39 @@ interface Booking {
 
 const STATUS_META: Record<
   Booking["status"],
-  { labelKey: MessageKey; color: string; icon: any }
+  { labelKey: MessageKey; color: string }
 > = {
-  PENDING_PAYMENT: { labelKey: "bookings.statusPendingPayment", color: "#FBBF24", icon: '<svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg>',},
-  CONFIRMED: { labelKey: "bookings.statusConfirmed", color: "#34D399", icon: '<svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><circle cx="12" cy="12" r="10"/><polyline points="9 12 12 15 16 10"/></svg>',},
-  COMPLETED: { labelKey: "bookings.statusCompleted", color: "#9B98A5", icon: '<svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><circle cx="12" cy="12" r="10"/><polyline points="9 12 12 15 16 10"/></svg>',},
-  CANCELLED: { labelKey: "bookings.statusCancelled", color: "#EF4444", icon: '<svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><circle cx="12" cy="12" r="10"/><line x1="15" y1="9" x2="9" y2="15"/><line x1="9" y1="9" x2="15" y2="15"/></svg>',},
-  NO_SHOW: { labelKey: "bookings.statusNoShow", color: "#F87171", icon: '<svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12.01" y2="16"/></svg>',},
+  PENDING_PAYMENT: { labelKey: "bookings.statusPendingPayment", color: "#FBBF24" },
+  CONFIRMED: { labelKey: "bookings.statusConfirmed", color: "#34D399" },
+  COMPLETED: { labelKey: "bookings.statusCompleted", color: "#9B98A5" },
+  CANCELLED: { labelKey: "bookings.statusCancelled", color: "#EF4444" },
+  NO_SHOW: { labelKey: "bookings.statusNoShow", color: "#F87171" },
 };
+
+function StatusIcon({ status }: { status: Booking["status"] }) {
+  const props = {
+    width: "10",
+    height: "10",
+    viewBox: "0 0 24 24",
+    fill: "none",
+    stroke: "currentColor",
+    strokeWidth: "2",
+    strokeLinecap: "round" as const,
+    strokeLinejoin: "round" as const,
+  };
+
+  switch (status) {
+    case "PENDING_PAYMENT":
+      return <svg {...props}><circle cx="12" cy="12" r="10" /><polyline points="12 6 12 12 16 14" /></svg>;
+    case "CONFIRMED":
+    case "COMPLETED":
+      return <svg {...props}><circle cx="12" cy="12" r="10" /><polyline points="9 12 12 15 16 10" /></svg>;
+    case "CANCELLED":
+      return <svg {...props}><circle cx="12" cy="12" r="10" /><line x1="15" y1="9" x2="9" y2="15" /><line x1="9" y1="9" x2="15" y2="15" /></svg>;
+    case "NO_SHOW":
+      return <svg {...props}><circle cx="12" cy="12" r="10" /><line x1="12" y1="8" x2="12" y2="12" /><line x1="12" y1="16" x2="12.01" y2="16" /></svg>;
+  }
+}
 
 function formatDateTime(iso: string, intlLocale: string): string {
   const d = new Date(iso);
@@ -233,7 +258,6 @@ export default function BookingsPage() {
           <div className="space-y-3">
             {filtered.map((b) => {
               const meta = STATUS_META[b.status];
-              const StatusIcon = meta.icon;
               const cancellable =
                 b.status === "PENDING_PAYMENT" || b.status === "CONFIRMED";
               const within24h = hoursUntil(b.startTime) < 24;
@@ -256,7 +280,7 @@ export default function BookingsPage() {
                           border: `1px solid ${meta.color}55`,
                         }}
                       >
-                        <span dangerouslySetInnerHTML={{ __html: meta.icon }} />
+                        <StatusIcon status={b.status} />
                         {t(meta.labelKey)}
                       </span>
                       {b.status === "PENDING_PAYMENT" && b.holdExpiresAt && (

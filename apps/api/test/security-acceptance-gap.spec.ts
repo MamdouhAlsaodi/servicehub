@@ -202,10 +202,9 @@ describe('B7 security acceptance gap closure', () => {
         .get(`/api/v1/payments/${paymentBId}`)
         .set('Authorization', `Bearer ${customerBAttackerJwt}`);
 
-      // The current controller deliberately returns BadRequestException here;
-      // this pins its implemented non-disclosure contract rather than claiming
-      // a 403/404 behavior that the route does not implement.
-      expect(response.status).toBe(400);
+      // Payment reads now use the explicit authorization contract: an
+      // authenticated but unrelated tenant receives 403 without payment data.
+      expect(response.status).toBe(403);
       expect(JSON.stringify(response.body)).not.toContain(paymentBId);
       expect(JSON.stringify(response.body)).not.toContain('b7-payment-');
     });

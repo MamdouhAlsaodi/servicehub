@@ -8,14 +8,30 @@ import {
   mountSwagger,
   SWAGGER_UI_PATH,
 } from './swagger';
+import {
+  getAllowedOrigins,
+  getJwtSecret,
+  isAllowedOrigin,
+} from './shared/config/runtime-config';
 
 async function bootstrap() {
+  // Validate all security-critical settings before constructing the server.
+  getJwtSecret();
+  const allowedOrigins = getAllowedOrigins();
   const app = await NestFactory.create<NestExpressApplication>(AppModule);
 
   app.setGlobalPrefix('api/v1');
 
   app.enableCors({
-    origin: 'http://localhost:3000',
+    origin: (origin, callback) => {
+      // Requests without an Origin header (for example health probes) are not
+      // browser CORS requests. Browser origins must exactly match the allow-list.
+      if (!origin || isAllowedOrigin(origin, allowedOrigins)) {
+        callback(null, true);
+        return;
+      }
+      callback(new Error('CORS origin is not allowed.'));
+    },
     credentials: true,
   });
 

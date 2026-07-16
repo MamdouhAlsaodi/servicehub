@@ -24,14 +24,39 @@ interface Booking {
   customer?: { id?: string; name: string };
 }
 
-type StatusMeta = { color: string; icon: string };
+type StatusMeta = { color: string };
 const STATUS_COLORS: Record<Booking["status"], StatusMeta> = {
-  PENDING_PAYMENT: { color: "#FBBF24", icon: '<svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg>' },
-  CONFIRMED: { color: "#34D399", icon: '<svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><circle cx="12" cy="12" r="10"/><polyline points="9 12 12 15 16 10"/></svg>' },
-  COMPLETED: { color: "#9B98A5", icon: '<svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><circle cx="12" cy="12" r="10"/><polyline points="9 12 12 15 16 10"/></svg>' },
-  CANCELLED: { color: "#EF4444", icon: '<svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><circle cx="12" cy="12" r="10"/><line x1="15" y1="9" x2="9" y2="15"/><line x1="9" y1="9" x2="15" y2="15"/></svg>' },
-  NO_SHOW: { color: "#F87171", icon: '<svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12.01" y2="16"/></svg>' },
+  PENDING_PAYMENT: { color: "#FBBF24" },
+  CONFIRMED: { color: "#34D399" },
+  COMPLETED: { color: "#9B98A5" },
+  CANCELLED: { color: "#EF4444" },
+  NO_SHOW: { color: "#F87171" },
 };
+
+function StatusIcon({ status }: { status: Booking["status"] }) {
+  const props = {
+    width: "10",
+    height: "10",
+    viewBox: "0 0 24 24",
+    fill: "none",
+    stroke: "currentColor",
+    strokeWidth: "2",
+    strokeLinecap: "round" as const,
+    strokeLinejoin: "round" as const,
+  };
+
+  switch (status) {
+    case "PENDING_PAYMENT":
+      return <svg {...props}><circle cx="12" cy="12" r="10" /><polyline points="12 6 12 12 16 14" /></svg>;
+    case "CONFIRMED":
+    case "COMPLETED":
+      return <svg {...props}><circle cx="12" cy="12" r="10" /><polyline points="9 12 12 15 16 10" /></svg>;
+    case "CANCELLED":
+      return <svg {...props}><circle cx="12" cy="12" r="10" /><line x1="15" y1="9" x2="9" y2="15" /><line x1="9" y1="9" x2="15" y2="15" /></svg>;
+    case "NO_SHOW":
+      return <svg {...props}><circle cx="12" cy="12" r="10" /><line x1="12" y1="8" x2="12" y2="12" /><line x1="12" y1="16" x2="12.01" y2="16" /></svg>;
+  }
+}
 
 function groupByDay(bookings: Booking[]): Record<string, Booking[]> {
   const groups: Record<string, Booking[]> = {};
@@ -296,7 +321,7 @@ export default function VendorBookingsPage() {
                               border: `1px solid ${meta.color}55`,
                             }}
                           >
-                            <span dangerouslySetInnerHTML={{ __html: meta.icon }} />
+                            <StatusIcon status={b.status} />
                             {statusLabel(b.status)}
                           </span>
                         </div>
